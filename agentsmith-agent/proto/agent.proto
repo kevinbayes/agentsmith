@@ -1,0 +1,15 @@
+syntax = "proto3";
+package agent;
+
+service AgentService {
+  /// Health check
+  rpc AskAgent (Request) returns (Response);
+}
+
+message Request {
+  uint64 id = 1;
+}
+
+message Response {
+  uint64 id = 1;
+}

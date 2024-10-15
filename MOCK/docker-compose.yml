@@ -1,0 +1,15 @@
+version: '3.6'
+services:
+
+  mockserver:
+    image: mockserver/mockserver:latest
+    ports:
+      - "1080:1080"
+    environment:
+      MOCKSERVER_MAX_EXPECTATIONS: 100
+      MOCKSERVER_MAX_HEADER_SIZE: 8192
+      MOCKSERVER_INITIALIZATION_JSON_PATH: /config/initializer.json
+    volumes:
+      - type: bind
+        source: ./mockserver/
+        target: /config

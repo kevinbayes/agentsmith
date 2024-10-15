@@ -1,0 +1,18 @@
+[package]
+name = "agentsmith"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = [
+    "agentsmith-agent",
+    "agentsmith-eval",
+    "agentsmith-common",
+    "agentsmith-prompt",
+    "agentsmith-toolbox",
+    "agentsmith-orchestrator"
+]
+
+[dependencies]
+
+

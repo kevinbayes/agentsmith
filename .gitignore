@@ -1,0 +1,12 @@
+.idea/
+*.iml
+.scripts/http-client.private.env.json
+
+**/Cargo.lock
+**/secret-config.json
+
+
+target/
+
+
+.agents/

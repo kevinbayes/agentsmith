@@ -1,0 +1,11 @@
+[
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    },
+    "httpResponse": {
+      "body": {}
+    }
+  }
+]

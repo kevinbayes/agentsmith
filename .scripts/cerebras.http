@@ -13,7 +13,7 @@
 #  "top_p": 1
 #}'
 POST https://api.cerebras.ai/v1/chat/completions
-Authorization: Bearer csk-c24n3vw3666wd252dxxdjkr4rrtvvjhnfkwr8x3266cmfv5h
+Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {

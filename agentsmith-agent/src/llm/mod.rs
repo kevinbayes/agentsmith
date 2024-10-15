@@ -1,4 +1,5 @@
 pub mod llm;
+pub mod anthropic_llm;
 pub mod cerebras_llm;
 pub mod gcp_gemini_llm;
 pub mod llm_factory;

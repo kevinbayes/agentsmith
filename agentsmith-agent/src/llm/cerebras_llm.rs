@@ -10,6 +10,7 @@ use agentsmith_common::error::error::{Error, Result};
 use chrono::Local;
 use tracing::info;
 use tracing_subscriber;
+use crate::llm::openai_llm::{OpenAIGenerateResponse, OpenAIRequest, OpenAIRequestMessage, UserContent};
 
 #[derive(Clone, Debug)]
 pub struct CerebrasLLM {
@@ -18,75 +19,6 @@ pub struct CerebrasLLM {
     model: String,
     client: Arc<Mutex<reqwest::Client>>,
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct CerebrasRequest {
-    #[serde(rename = "model")]
-    pub model: String,
-    #[serde(rename = "stream")]
-    pub stream: bool,
-    #[serde(rename = "messages")]
-    pub messages: Vec<CerebrasRequestMessage>,
-    #[serde(rename = "temperature")]
-    pub temperature: f32,
-    #[serde(rename = "max_tokens")]
-    pub max_tokens: i32,
-    #[serde(rename = "seed")]
-    pub seed: i32,
-    #[serde(rename = "top_p")]
-    pub top_p: i32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct CerebrasRequestMessage {
-    #[serde(rename = "content")]
-    pub content: String,
-    #[serde(rename = "role")]
-    pub role: String,
-}
-
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CerebrasGenerateResponse {
-    pub id: String,
-    pub choices: Vec<CerebrasGenerateResponseChoice>,
-    pub created: i64,
-    pub model: String,
-    pub system_fingerprint: String,
-    pub object: String,
-    pub usage: CerebrasGenerateResponseUsage,
-    pub time_info: CerebrasGenerateResponseTimeInfo,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CerebrasGenerateResponseChoice {
-    pub finish_reason: String,
-    pub index: u32,
-    pub message: CerebrasGenerateResponseMessage,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CerebrasGenerateResponseMessage {
-    pub content: String,
-    pub role: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CerebrasGenerateResponseUsage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CerebrasGenerateResponseTimeInfo {
-    pub queue_time: f64,
-    pub prompt_time: f64,
-    pub completion_time: f64,
-    pub total_time: f64,
-    pub created: i64,
-}
-
 
 impl CerebrasLLM {
 
@@ -112,24 +44,28 @@ impl CerebrasLLM {
 impl GenerateText for CerebrasLLM {
 
     async fn generate_text(&self, prompt: &Prompt) -> Result<LLMResult> {
-        let url_str = format!("{}{}", self.base_url.clone(), "/v1/chat/completions");
+        let url_str = format!("{}/{}", self.base_url.clone(), "v1/chat/completions");
         let api_key = self.api_key.clone();
         let model = self.model.clone();
 
-        let request_obj = CerebrasRequest {
+        let request_obj = OpenAIRequest {
             model,
             stream: false,
-            messages: vec![CerebrasRequestMessage {
+            messages: vec![OpenAIRequestMessage::System {
                 role: String::from("system"),
                 content: prompt.clone().system,
-            }, CerebrasRequestMessage {
+                name: None,
+            }, OpenAIRequestMessage::User {
                 role: String::from("user"),
-                content: prompt.clone().user,
+                content: vec![UserContent::Text { type_: "text".to_string(), text: prompt.clone().user }],
+                name: None,
             }],
             temperature: 1.0,
             max_tokens: 500,
             seed: 0,
             top_p: 1,
+            tool_choice: None,
+            tools: None,
         };
 
         let client = self.client.lock().unwrap();
@@ -153,16 +89,14 @@ impl GenerateText for CerebrasLLM {
                 Error::AgentError { id: 0, code: 2 }
             })
             .await?
-            .json::<CerebrasGenerateResponse>()
+            .json::<OpenAIGenerateResponse>()
             .map_err(|e| {
                 println!("Error: {:?}", e);
                 Error::AgentError { id: 0, code: 2 }
             })
             .await?;
 
-        let response = &res.choices[0].message.content;
-        //
-        Ok(LLMResult::new(response.clone()))
+        Ok(LLMResult::from_cerebras(&res))
     }
 }
 
@@ -171,6 +105,7 @@ impl GenerateText for CerebrasLLM {
 mod tests {
     use std::fs;
     use agentsmith_common::config::config::read_config;
+    use crate::llm::openai_llm::{OpenAIGenerateResponseTimeInfo, OpenAIGenerateResponseUsage};
     use super::*;
 
 
@@ -210,29 +145,29 @@ mod tests {
         let now = Local::now().timestamp_millis();
 
         // Parse the string of data into serde_json::Value.
-        let p: CerebrasGenerateResponse = match serde_json::from_str(data) {
+        let p: OpenAIGenerateResponse = match serde_json::from_str(data) {
             Ok(v) => v,
             Err(e) => {
                 println!("Error: {:?}", e);
-                CerebrasGenerateResponse{
+                OpenAIGenerateResponse{
                     id: "".to_string(),
                     choices: vec![],
                     created: now,
                     model: "llama3.1-8b".to_string(),
                     system_fingerprint: "".to_string(),
                     object: "".to_string(),
-                    usage: CerebrasGenerateResponseUsage {
+                    usage: OpenAIGenerateResponseUsage {
                         prompt_tokens: 0,
                         completion_tokens: 0,
                         total_tokens: 0,
                     },
-                    time_info: CerebrasGenerateResponseTimeInfo {
+                    time_info: Some(OpenAIGenerateResponseTimeInfo {
                         queue_time: 0.0,
                         prompt_time: 0.0,
                         completion_time: 0.0,
                         total_time: 0.0,
                         created: now,
-                    },
+                    }),
                 }
             },
         };

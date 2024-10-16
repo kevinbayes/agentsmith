@@ -10,26 +10,134 @@ use agentsmith_common::error::error::{Error, Result};
 use chrono::Local;
 use tracing::info;
 use tracing_subscriber;
-use crate::llm::openai_llm::{OpenAIGenerateResponse, OpenAIRequest, OpenAIRequestMessage, UserContent};
 
 #[derive(Clone, Debug)]
-pub struct GroqLLM {
+pub struct OpenAILLM {
     api_key: String,
     base_url: String,
     model: String,
     client: Arc<Mutex<reqwest::Client>>,
 }
 
-impl GroqLLM {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OpenAIRequest {
+    #[serde(rename = "model")]
+    pub model: String,
+    #[serde(rename = "stream")]
+    pub stream: bool,
+    #[serde(rename = "messages")]
+    pub messages: Vec<OpenAIRequestMessage>,
+    #[serde(rename = "temperature")]
+    pub temperature: f32,
+    #[serde(rename = "max_tokens")]
+    pub max_tokens: i32,
+    #[serde(rename = "seed")]
+    pub seed: i32,
+    #[serde(rename = "top_p")]
+    pub top_p: i32,
+    pub tool_choice: Option<ToolChoice>,
+    pub tools: Option<Vec<Tool>>
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OpenAIRequestMessage {
+    System { role: String, content: String, name: Option<String> },
+    User { role: String, content: Vec<UserContent>, name: Option<String> },
+    Assistant { role: String, content: Option<Vec<AssistantContent>>, refusal: Option<String>, name: Option<String>, tool_calls: Option<AssistantToolCall> },
+    Tool { role: String, content: Vec<String>, name: String },
+}
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UserContent {
+    Text { type_: String, text: String },
+    Image { type_: String, image_url: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AssistantContent {
+    Text { type_: String, text: String },
+    Image { type_: String, refusal: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssistantToolCall {
+    pub id: String,
+    pub type_: String,
+    pub function: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolChoice {
+    Auto { type_: String, disable_parallel_tool_use: Option<bool> },
+    Any { type_: String, disable_parallel_tool_use: Option<bool> },
+    Tool { type_: String, name: String, disable_parallel_tool_use: Option<bool> },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Tool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+#[derive(Clone, Debug,Deserialize, Serialize)]
+pub struct OpenAIGenerateResponse {
+    pub id: String,
+    pub choices: Vec<OpenAIGenerateResponseChoice>,
+    pub created: i64,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub usage: OpenAIGenerateResponseUsage,
+    pub time_info: Option<OpenAIGenerateResponseTimeInfo>,
+}
+
+#[derive(Clone, Debug,Deserialize, Serialize)]
+pub struct OpenAIGenerateResponseChoice {
+    pub finish_reason: String,
+    pub index: u32,
+    pub message: OpenAIGenerateResponseMessage,
+}
+
+#[derive(Clone, Debug,Deserialize, Serialize)]
+pub struct OpenAIGenerateResponseMessage {
+    pub content: Option<String>,
+    pub role: String,
+    pub tool_calls: Option<Value>,
+}
+
+#[derive(Clone, Debug,Deserialize, Serialize)]
+pub struct OpenAIGenerateResponseUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+#[derive(Clone, Debug,Deserialize, Serialize)]
+pub struct OpenAIGenerateResponseTimeInfo {
+    pub queue_time: f64,
+    pub prompt_time: f64,
+    pub completion_time: f64,
+    pub total_time: f64,
+    pub created: i64,
+}
+
+
+impl OpenAILLM {
 
     pub fn new(config: Config, model: String) -> Self {
 
-        let groq_config = config.config.gateways.registry
-            .get("groq_gateway")
+        let openai_config = config.config.gateways.registry
+            .get("openai_gateway")
             .unwrap();
 
-        let api_key = groq_config.api_key.clone();
-        let base_url = groq_config.baseurl.clone();
+        let api_key = openai_config.api_key.clone();
+        let base_url = openai_config.baseurl.clone();
         let client = Arc::new(Mutex::new(reqwest::ClientBuilder::new()
             .connect_timeout(Duration::from_secs(60))
             .build()
@@ -41,10 +149,10 @@ impl GroqLLM {
 
 }
 
-impl GenerateText for GroqLLM {
+impl GenerateText for OpenAILLM {
 
     async fn generate_text(&self, prompt: &Prompt) -> Result<LLMResult> {
-        let url_str = format!("{}/{}", self.base_url.clone(), "openai/v1/chat/completions");
+        let url_str = format!("{}{}", self.base_url.clone(), "/v1/chat/completions");
         let api_key = self.api_key.clone();
         let model = self.model.clone();
 
@@ -95,8 +203,8 @@ impl GenerateText for GroqLLM {
                 Error::AgentError { id: 0, code: 2 }
             })
             .await?;
-        //
-        Ok(LLMResult::from_groq(&res))
+
+        Ok(LLMResult::from_openai(&res))
     }
 }
 
@@ -105,7 +213,6 @@ impl GenerateText for GroqLLM {
 mod tests {
     use std::fs;
     use agentsmith_common::config::config::read_config;
-    use crate::llm::openai_llm::{OpenAIGenerateResponseTimeInfo, OpenAIGenerateResponseUsage};
     use super::*;
 
 
@@ -161,7 +268,13 @@ mod tests {
                         completion_tokens: 0,
                         total_tokens: 0,
                     },
-                    time_info: None,
+                    time_info: Some(OpenAIGenerateResponseTimeInfo {
+                        queue_time: 0.0,
+                        prompt_time: 0.0,
+                        completion_time: 0.0,
+                        total_time: 0.0,
+                        created: now,
+                    }),
                 }
             },
         };

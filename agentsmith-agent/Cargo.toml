@@ -32,3 +32,4 @@ prost-build = "0.13"
 [dev-dependencies]
 anyhow = "1"
 httpc-test = "0.1"
+testcontainers = "0.23"

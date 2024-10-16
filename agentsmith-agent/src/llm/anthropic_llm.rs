@@ -20,73 +20,105 @@ pub struct AnthropicLLM {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AnthropicRequest {
-    #[serde(rename = "model")]
-    pub model: String,
-    #[serde(rename = "system")]
-    pub system: String,
-    #[serde(rename = "stream")]
-    pub stream: bool,
-    #[serde(rename = "messages")]
-    pub messages: Vec<AnthropicRequestMessage>,
-    #[serde(rename = "temperature")]
-    pub temperature: f32,
-    #[serde(rename = "max_tokens")]
-    pub max_tokens: i32,
-    #[serde(rename = "seed")]
-    pub seed: i32,
-    #[serde(rename = "top_p")]
-    pub top_p: i32,
+pub struct AnthropicMessage {
+    pub role: Role,
+    pub content: Vec<AnthropicMessageContent>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct AnthropicRequestMessage {
-    #[serde(rename = "content")]
-    pub content: String,
-    #[serde(rename = "role")]
-    pub role: String,
+#[serde(untagged)]
+pub enum AnthropicMessageContent {
+    Text { type_: String, text: String },
+    Image { type_: String, source: AnthropicMessageContentSource },
+    ToolUse { type_: String, id: String, name: String, input: Option<Value> },
+    ToolResult { type_: String, tool_use_id: String, is_error: Option<bool>, content: Option<Value> },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolResultContent {
+    Text { type_: String, text: String },
+    Image { type_: String, source: AnthropicMessageContentSource },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AnthropicMessageContentSource {
+    pub type_ : String,
+    pub media_type: String,
+    pub data: String
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AnthropicMetadata {
+    pub user_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Role {
+    #[serde(rename = "human")]
+    Human,
+    #[serde(rename = "assistant")]
+    Assistant,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolChoice {
+    Auto { type_: String, disable_parallel_tool_use: Option<bool> },
+    Any { type_: String, disable_parallel_tool_use: Option<bool> },
+    Tool { type_: String, name: String, disable_parallel_tool_use: Option<bool> },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Tool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
 }
 
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct AnthropicGenerateResponse {
-    pub id: String,
-    pub content: Vec<AnthropicGenerateResponseChoice>,
-    pub created: i64,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AnthropicRequest {
     pub model: String,
-    pub system_fingerprint: String,
-    pub object: String,
-    pub usage: AnthropicGenerateResponseUsage,
-    pub time_info: AnthropicGenerateResponseTimeInfo,
+    pub system: String,
+    pub metadata: Option<AnthropicMetadata>,
+    pub messages: Vec<AnthropicMessage>,
+    pub max_tokens: Option<u32>,
+    pub stop_sequences: Option<Vec<String>>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub stream: Option<bool>,
+    pub tool_choice: Option<ToolChoice>,
+    pub tools: Option<Vec<Tool>>
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct AnthropicGenerateResponseChoice {
-    pub finish_reason: String,
-    pub index: u32,
-    pub message: AnthropicGenerateResponseMessage,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AnthropicGenerateResponse {
+    pub content: Vec<Content>,
+    pub model: String,
+    pub stop_reason: Option<String>,
+    pub usage: Usage,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct AnthropicGenerateResponseMessage {
-    pub content: String,
-    pub role: String,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Content {
+    pub text: Option<String>,
+    pub r#type: String,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub input: Option<Value>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct AnthropicGenerateResponseUsage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Usage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct AnthropicGenerateResponseTimeInfo {
-    pub queue_time: f64,
-    pub prompt_time: f64,
-    pub completion_time: f64,
-    pub total_time: f64,
-    pub created: i64,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AnthropicError {
+    pub r#type: String,
+    pub message: String,
 }
 
 
@@ -94,12 +126,12 @@ impl AnthropicLLM {
 
     pub fn new(config: Config, model: String) -> Self {
 
-        let Anthropic_config = config.config.gateways.registry
-            .get("Anthropic_gateway")
+        let anthropic_config = config.config.gateways.registry
+            .get("anthropic_gateway")
             .unwrap();
 
-        let api_key = Anthropic_config.api_key.clone();
-        let base_url = Anthropic_config.baseurl.clone();
+        let api_key = anthropic_config.api_key.clone();
+        let base_url = anthropic_config.baseurl.clone();
         let client = Arc::new(Mutex::new(reqwest::ClientBuilder::new()
             .connect_timeout(Duration::from_secs(60))
             .build()
@@ -114,24 +146,25 @@ impl AnthropicLLM {
 impl GenerateText for AnthropicLLM {
 
     async fn generate_text(&self, prompt: &Prompt) -> Result<LLMResult> {
-        let url_str = format!("{}{}", self.base_url.clone(), "/v1/chat/completions");
+        let url_str = format!("{}{}", self.base_url.clone(), "/v1/messages");
         let api_key = self.api_key.clone();
         let model = self.model.clone();
 
         let request_obj = AnthropicRequest {
             model,
-            stream: false,
-            messages: vec![AnthropicRequestMessage {
-                role: String::from("system"),
-                content: prompt.clone().system,
-            }, AnthropicRequestMessage {
-                role: String::from("user"),
-                content: prompt.clone().user,
+            stream: Some(false),
+            tool_choice: None,
+            system: prompt.clone().system,
+            metadata: None,
+            messages: vec![AnthropicMessage {
+                role: Role::Human,
+                content: vec![AnthropicMessageContent::Text { type_: String::from("text"), text: prompt.clone().system}],
             }],
-            temperature: 1.0,
-            max_tokens: 500,
-            seed: 0,
-            top_p: 1,
+            temperature: Some(1.0),
+            max_tokens: Some(500),
+            top_p: Some(1.0),
+            stop_sequences: None,
+            tools: None,
         };
 
         let client = self.client.lock().unwrap();
@@ -161,10 +194,8 @@ impl GenerateText for AnthropicLLM {
                 Error::AgentError { id: 0, code: 2 }
             })
             .await?;
-
-        let response = &res.choices[0].message.content;
         //
-        Ok(LLMResult::new(response.clone()))
+        Ok(LLMResult::from_anthropic(&res))
     }
 }
 
@@ -181,33 +212,23 @@ mod tests {
     async fn test_parse() {
 
         let data = r#"{
-  "id": "chatcmpl-292e278f-514e-4186-9010-91ce6a14168b",
-  "choices": [
+  "content": [
     {
-      "finish_reason": "stop",
-      "index": 0,
-      "message": {
-        "content": "Hello! How can I assist you today?",
-        "role": "assistant"
-      }
+      "text": "Hi! My name is Claude.",
+      "type": "text"
     }
   ],
-  "created": 1723733419,
-  "model": "llama3.1-8b",
-  "system_fingerprint": "fp_70185065a4",
-  "object": "chat.completion",
+  "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+  "model": "claude-3-5-sonnet-20240620",
+  "role": "assistant",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "type": "message",
   "usage": {
-    "prompt_tokens": 12,
-    "completion_tokens": 10,
-    "total_tokens": 22
-  },
-  "time_info": {
-    "queue_time": 0.000073161,
-    "prompt_time": 0.0010744798888888889,
-    "completion_time": 0.005658071111111111,
-    "total_time": 0.022224903106689453,
-    "created": 1723733419
-  }}"#;
+    "input_tokens": 2095,
+    "output_tokens": 503
+  }
+}"#;
 
         let now = Local::now().timestamp_millis();
 
@@ -217,28 +238,14 @@ mod tests {
             Err(e) => {
                 println!("Error: {:?}", e);
                 AnthropicGenerateResponse{
-                    id: "".to_string(),
-                    choices: vec![],
-                    created: now,
-                    model: "llama3.1-8b".to_string(),
-                    system_fingerprint: "".to_string(),
-                    object: "".to_string(),
-                    usage: AnthropicGenerateResponseUsage {
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: 0,
-                    },
-                    time_info: AnthropicGenerateResponseTimeInfo {
-                        queue_time: 0.0,
-                        prompt_time: 0.0,
-                        completion_time: 0.0,
-                        total_time: 0.0,
-                        created: now,
-                    },
+                    content: vec![],
+                    model: "".to_string(),
+                    stop_reason: None,
+                    usage: Usage { input_tokens: 0, output_tokens: 0 },
                 }
             },
         };
 
-        println!("response: hi");
+        println!("response {:?}", p);
     }
 }

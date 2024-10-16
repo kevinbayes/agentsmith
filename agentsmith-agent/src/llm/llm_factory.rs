@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use agentsmith_common::config::config::Config;
 use log::info;
 use agentsmith_common::error::error::Error::AgentFactoryError;
+use crate::llm::anthropic_llm::AnthropicLLM;
 use crate::llm::gcp_gemini_llm::GeminiLLM;
 use crate::llm::llm::{GenerateText, LLMResult, Prompt};
 
@@ -13,6 +14,7 @@ use crate::llm::huggingface_tgi_llm::HuggingFaceLLM;
 
 #[derive(Clone, Debug)]
 pub enum LLM {
+    AnthropicLLM(AnthropicLLM),
     CerebrasLLM(CerebrasLLM),
     GeminiLLM(GeminiLLM),
     GroqLLM(GroqLLM),
@@ -27,6 +29,7 @@ impl LLMClient for LLM {
     async fn execute(&self, prompt: &Prompt) -> agentsmith_common::error::error::Result<LLMResult> {
         info!("Test");
         match self {
+            LLM::AnthropicLLM(llm) => llm.generate_text(prompt).await,
             LLM::CerebrasLLM(llm) => llm.generate_text(prompt).await,
             LLM::GeminiLLM(llm) => llm.generate_text(prompt).await,
             LLM::GroqLLM(llm) => llm.generate_text(prompt).await,
@@ -85,6 +88,12 @@ impl LLMFactory {
             }
             _ => {
                 match key {
+                    "anthropic" => {
+                        let llm = &LLM::AnthropicLLM(AnthropicLLM::new(self.config.clone(), String::from("claude-3-5-sonnet-20240620")));
+                        registry.register(key.to_string(), llm.clone());
+
+                        Ok(llm.clone())
+                    }
                     "cerebras" => {
                         let llm = &LLM::CerebrasLLM(CerebrasLLM::new(self.config.clone(), String::from("llama3.1-8b")));
                         registry.register(key.to_string(), llm.clone());
@@ -116,19 +125,38 @@ impl LLMFactory {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use testcontainers::core::{IntoContainerPort, Mount, WaitFor};
+    use testcontainers::{GenericImage, ImageExt};
+    use testcontainers::runners::AsyncRunner;
     use agentsmith_common::config::config::read_config;
     use super::*;
 
 
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test]
     async fn test_call_llm() {
 
         tracing_subscriber::fmt::init();
 
+        let current_dir = std::env::current_dir().unwrap();
+
+        // let container = GenericImage::new("mockserver/mockserver", "latest")
+        //     .with_exposed_port(1080.tcp())
+        //     .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
+        //     .with_mount(Mount::bind_mount(format!("{}/resources/mockserver/", current_dir.to_str().expect("Need a directory.")), "/config"))
+        //     .start()
+        //     .await
+        //     .expect("Mockserver started.");
+
         let config = read_config("./secret-config.json").unwrap();
 
-        let factory = crate::llm::llm_factory::LLMFactory::new(config);
+        let factory = LLMFactory::new(config);
+
+        let result4 = factory.instance("anthropic").unwrap().execute(&Prompt {
+            user: String::from("Tell me what your job is?"),
+            system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
+        }).await.unwrap();
 
         let result = factory.instance("cerebras").unwrap().execute(&Prompt {
             user: String::from("Tell me what your job is?"),
@@ -145,9 +173,11 @@ mod tests {
             system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
         }).await.unwrap();
 
+
         info!("cerebras: {:?}", result);
         info!("groq: {:?}", result2);
         info!("gemini: {:?}", result3);
+        info!("anthropic: {:?}", result4);
         assert_eq!(result.message.clone(), result.message);
     }
 }

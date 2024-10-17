@@ -43,7 +43,7 @@ impl GroqLLM {
 
 impl GenerateText for GroqLLM {
 
-    async fn generate_text(&self, prompt: &Prompt) -> Result<LLMResult> {
+    async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
         let url_str = format!("{}/{}", self.base_url.clone(), "openai/v1/chat/completions");
         let api_key = self.api_key.clone();
         let model = self.model.clone();
@@ -150,7 +150,7 @@ mod tests {
             Err(e) => {
                 println!("Error: {:?}", e);
                 OpenAIGenerateResponse{
-                    id: "".to_string(),
+                    id: None,
                     choices: vec![],
                     created: now,
                     model: "llama3.1-8b".to_string(),
@@ -166,6 +166,75 @@ mod tests {
             },
         };
 
-        println!("response: hi");
+        println!("response: {:?}", p);
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_tools_parse() {
+
+        let data = r#"{
+  "id": "chatcmpl-b9dd3ddc-1869-4cdd-adc3-ec1a7e6ab4e1",
+  "object": "chat.completion",
+  "created": 1729110815,
+  "model": "llama3-8b-8192",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "id": "call_yywq",
+            "type": "function",
+            "function": {
+              "name": "get_current_weather",
+              "arguments": "{\"location\":\"Boston, MA\",\"unit\":\"fahrenheit\"}"
+            }
+          }
+        ]
+      },
+      "logprobs": null,
+      "finish_reason": "tool_calls"
+    }
+  ],
+  "usage": {
+    "queue_time": 0.0021036009999999966,
+    "prompt_tokens": 964,
+    "prompt_time": 0.120271111,
+    "completion_tokens": 77,
+    "completion_time": 0.064166667,
+    "total_tokens": 1041,
+    "total_time": 0.184437778
+  },
+  "system_fingerprint": "fp_6a6771ae9c",
+  "x_groq": {
+    "id": "req_01jabgjc95e4evkhn6k654jk68"
+  }
+}"#;
+
+        let now = Local::now().timestamp_millis();
+
+        // Parse the string of data into serde_json::Value.
+        let p: OpenAIGenerateResponse = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(e) => {
+                println!("Error: {:?}", e);
+                OpenAIGenerateResponse{
+                    id: None,
+                    choices: vec![],
+                    created: now,
+                    model: "llama3.1-8b".to_string(),
+                    system_fingerprint: "".to_string(),
+                    object: "".to_string(),
+                    usage: OpenAIGenerateResponseUsage {
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        total_tokens: 0,
+                    },
+                    time_info: None,
+                }
+            },
+        };
+
+        println!("response: {:?}", p);
     }
 }

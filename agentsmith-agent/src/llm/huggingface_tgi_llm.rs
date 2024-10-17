@@ -36,7 +36,7 @@ impl HuggingFaceLLM {
 
 impl GenerateText for HuggingFaceLLM {
 
-    async fn generate_text(&self, prompt: &Prompt) -> Result<LLMResult> {
+    async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
 
         Ok(LLMResult::new(String::from("Static!")))
     }

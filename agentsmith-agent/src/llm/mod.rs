@@ -6,3 +6,4 @@ pub mod llm_factory;
 pub mod openai_llm;
 pub mod huggingface_tgi_llm;
 pub mod groq_llm;
+mod prompt;

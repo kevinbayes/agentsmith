@@ -43,7 +43,7 @@ impl CerebrasLLM {
 
 impl GenerateText for CerebrasLLM {
 
-    async fn generate_text(&self, prompt: &Prompt) -> Result<LLMResult> {
+    async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
         let url_str = format!("{}/{}", self.base_url.clone(), "v1/chat/completions");
         let api_key = self.api_key.clone();
         let model = self.model.clone();
@@ -150,7 +150,7 @@ mod tests {
             Err(e) => {
                 println!("Error: {:?}", e);
                 OpenAIGenerateResponse{
-                    id: "".to_string(),
+                    id: None,
                     choices: vec![],
                     created: now,
                     model: "llama3.1-8b".to_string(),
@@ -172,6 +172,81 @@ mod tests {
             },
         };
 
-        println!("response: hi");
+        println!("response: {:?}", p);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_tools_parse() {
+
+        let data = r#"{
+  "id": "chatcmpl-07468809-0b53-4e2e-9d71-95fcc03c167a",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "message": {
+        "tool_calls": [
+          {
+            "id": "94b7346ee",
+            "type": "function",
+            "function": {
+              "name": "get_current_weather",
+              "arguments": "{\"location\": \"Boston, MA\", \"unit\": \"fahrenheit\"}"
+            }
+          }
+        ],
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1729111136,
+  "model": "llama3.1-8b",
+  "system_fingerprint": "fp_97b75e13af",
+  "object": "chat.completion",
+  "usage": {
+    "prompt_tokens": 255,
+    "completion_tokens": 19,
+    "total_tokens": 274
+  },
+  "time_info": {
+    "queue_time": 1.7731e-05,
+    "prompt_time": 0.015234503277777778,
+    "completion_time": 0.009452399722222223,
+    "total_time": 0.03803896903991699,
+    "created": 1729111136
+  }
+}"#;
+
+        let now = Local::now().timestamp_millis();
+
+        // Parse the string of data into serde_json::Value.
+        let p: OpenAIGenerateResponse = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(e) => {
+                println!("Error: {:?}", e);
+                OpenAIGenerateResponse{
+                    id: None,
+                    choices: vec![],
+                    created: now,
+                    model: "llama3.1-8b".to_string(),
+                    system_fingerprint: "".to_string(),
+                    object: "".to_string(),
+                    usage: OpenAIGenerateResponseUsage {
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        total_tokens: 0,
+                    },
+                    time_info: Some(OpenAIGenerateResponseTimeInfo {
+                        queue_time: 0.0,
+                        prompt_time: 0.0,
+                        completion_time: 0.0,
+                        total_time: 0.0,
+                        created: now,
+                    }),
+                }
+            },
+        };
+
+        println!("response: {:?}", p);
     }
 }

@@ -28,24 +28,56 @@ pub struct AnthropicMessage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AnthropicMessageContent {
-    Text { type_: String, text: String },
-    Image { type_: String, source: AnthropicMessageContentSource },
-    ToolUse { type_: String, id: String, name: String, input: Option<Value> },
-    ToolResult { type_: String, tool_use_id: String, is_error: Option<bool>, content: Option<Value> },
+    Text {
+        #[serde(rename = "type")]
+        type_: String,
+        text: String,
+    },
+    Image {
+        #[serde(rename = "type")]
+        type_: String,
+        source: AnthropicMessageContentSource,
+    },
+    ToolUse {
+        #[serde(rename = "type")]
+        type_: String,
+        id: String,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input: Option<Value>,
+    },
+    ToolResult {
+        #[serde(rename = "type")]
+        type_: String,
+        tool_use_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_error: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<Value>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ToolResultContent {
-    Text { type_: String, text: String },
-    Image { type_: String, source: AnthropicMessageContentSource },
+    Text {
+        #[serde(rename = "type")]
+        type_: String,
+        text: String,
+    },
+    Image {
+        #[serde(rename = "type")]
+        type_: String,
+        source: AnthropicMessageContentSource,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AnthropicMessageContentSource {
-    pub type_ : String,
+    #[serde(rename = "type")]
+    pub type_: String,
     pub media_type: String,
-    pub data: String
+    pub data: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -55,8 +87,8 @@ pub struct AnthropicMetadata {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Role {
-    #[serde(rename = "human")]
-    Human,
+    #[serde(rename = "user")]
+    User,
     #[serde(rename = "assistant")]
     Assistant,
 }
@@ -64,9 +96,22 @@ pub enum Role {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ToolChoice {
-    Auto { type_: String, disable_parallel_tool_use: Option<bool> },
-    Any { type_: String, disable_parallel_tool_use: Option<bool> },
-    Tool { type_: String, name: String, disable_parallel_tool_use: Option<bool> },
+    Auto {
+        #[serde(rename = "type")]
+        type_: String,
+        disable_parallel_tool_use: Option<bool>,
+    },
+    Any {
+        #[serde(rename = "type")]
+        type_: String,
+        disable_parallel_tool_use: Option<bool>,
+    },
+    Tool {
+        #[serde(rename = "type")]
+        type_: String,
+        name: String,
+        disable_parallel_tool_use: Option<bool>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -81,31 +126,44 @@ pub struct Tool {
 pub struct AnthropicRequest {
     pub model: String,
     pub system: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<AnthropicMetadata>,
     pub messages: Vec<AnthropicMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ToolChoice>,
-    pub tools: Option<Vec<Tool>>
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AnthropicGenerateResponse {
     pub content: Vec<Content>,
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
     pub usage: Usage,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Content {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     pub r#type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
 }
 
@@ -123,9 +181,7 @@ pub struct AnthropicError {
 
 
 impl AnthropicLLM {
-
     pub fn new(config: Config, model: String) -> Self {
-
         let anthropic_config = config.config.gateways.registry
             .get("anthropic_gateway")
             .unwrap();
@@ -139,13 +195,10 @@ impl AnthropicLLM {
 
         Self { api_key, base_url, model, client }
     }
-
-
 }
 
 impl GenerateText for AnthropicLLM {
-
-    async fn generate_text(&self, prompt: &Prompt) -> Result<LLMResult> {
+    async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
         let url_str = format!("{}{}", self.base_url.clone(), "/v1/messages");
         let api_key = self.api_key.clone();
         let model = self.model.clone();
@@ -157,8 +210,11 @@ impl GenerateText for AnthropicLLM {
             system: prompt.clone().system,
             metadata: None,
             messages: vec![AnthropicMessage {
-                role: Role::Human,
-                content: vec![AnthropicMessageContent::Text { type_: String::from("text"), text: prompt.clone().system}],
+                role: Role::User,
+                content: vec![AnthropicMessageContent::Text {
+                    type_: String::from("text"),
+                    text: prompt.clone().system
+                }],
             }],
             temperature: Some(1.0),
             max_tokens: Some(500),
@@ -169,10 +225,11 @@ impl GenerateText for AnthropicLLM {
 
         let client = self.client.lock().unwrap();
 
-        let request =  client.post(&url_str)
-            .bearer_auth(&api_key)
-            .header("User-Agent", format!("AgentSmith Framework"))
-            .header("Content-Type", format!("application/json"))
+        let request = client.post(&url_str)
+            .header("User-Agent", "AgentSmith Framework".to_string())
+            .header("anthropic-version", "2023-06-01".to_string())
+            .header("x-api-key", format!("{}", api_key))
+            .header("Content-Type", "application/json".to_string())
             .json(&request_obj)
             .build()
             .map_err(|e| {
@@ -207,10 +264,8 @@ mod tests {
     use super::*;
 
 
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_parse() {
-
         let data = r#"{
   "content": [
     {
@@ -237,13 +292,61 @@ mod tests {
             Ok(v) => v,
             Err(e) => {
                 println!("Error: {:?}", e);
-                AnthropicGenerateResponse{
+                AnthropicGenerateResponse {
                     content: vec![],
                     model: "".to_string(),
                     stop_reason: None,
                     usage: Usage { input_tokens: 0, output_tokens: 0 },
                 }
-            },
+            }
+        };
+
+        println!("response {:?}", p);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_tools_parse() {
+        let data = r#"{
+  "id": "msg_01RRSnhxG1w1DVsvQA2qm2Mm",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-3-5-sonnet-20240620",
+  "content": [
+    {
+      "type": "text",
+      "text": "Certainly! I can help you with that information. To get the current weather in San Francisco, I'll use the get_weather function. Let me fetch that data for you."
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_012UQk4kPcYF7XYj67iZzbwi",
+      "name": "get_weather",
+      "input": {
+        "location": "San Francisco, CA"
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 384,
+    "output_tokens": 94
+  }
+}"#;
+
+        let now = Local::now().timestamp_millis();
+
+        // Parse the string of data into serde_json::Value.
+        let p: AnthropicGenerateResponse = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(e) => {
+                println!("Error: {:?}", e);
+                AnthropicGenerateResponse {
+                    content: vec![],
+                    model: "".to_string(),
+                    stop_reason: None,
+                    usage: Usage { input_tokens: 0, output_tokens: 0 },
+                }
+            }
         };
 
         println!("response {:?}", p);

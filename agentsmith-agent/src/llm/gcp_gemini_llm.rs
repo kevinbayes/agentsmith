@@ -97,7 +97,7 @@ impl GeminiLLM {
 
 impl GenerateText for GeminiLLM {
 
-    async fn generate_text(&self, prompt: &Prompt) -> Result<LLMResult> {
+    async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
         let url_str = format!("{}{}?key={}", &self.base_url, "/v1beta/models/gemini-pro:generateText", &self.api_key.clone());
         let url_str = format!("{}{}", &self.base_url, "/v1beta/models/gemini-pro:generateContent");
 

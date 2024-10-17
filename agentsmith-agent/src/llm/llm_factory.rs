@@ -11,6 +11,7 @@ use crate::llm::llm::{GenerateText, LLMResult, Prompt};
 use crate::llm::cerebras_llm::CerebrasLLM;
 use crate::llm::groq_llm::GroqLLM;
 use crate::llm::huggingface_tgi_llm::HuggingFaceLLM;
+use crate::llm::openai_llm::OpenAILLM;
 
 #[derive(Clone, Debug)]
 pub enum LLM {
@@ -18,6 +19,7 @@ pub enum LLM {
     CerebrasLLM(CerebrasLLM),
     GeminiLLM(GeminiLLM),
     GroqLLM(GroqLLM),
+    OpenAILLM(OpenAILLM),
     HuggingFaceLLM(HuggingFaceLLM),
 }
 
@@ -29,11 +31,12 @@ impl LLMClient for LLM {
     async fn execute(&self, prompt: &Prompt) -> agentsmith_common::error::error::Result<LLMResult> {
         info!("Test");
         match self {
-            LLM::AnthropicLLM(llm) => llm.generate_text(prompt).await,
-            LLM::CerebrasLLM(llm) => llm.generate_text(prompt).await,
-            LLM::GeminiLLM(llm) => llm.generate_text(prompt).await,
-            LLM::GroqLLM(llm) => llm.generate_text(prompt).await,
-            LLM::HuggingFaceLLM(llm) => llm.generate_text(prompt).await,
+            LLM::AnthropicLLM(llm) => llm.generate(prompt).await,
+            LLM::CerebrasLLM(llm) => llm.generate(prompt).await,
+            LLM::GeminiLLM(llm) => llm.generate(prompt).await,
+            LLM::GroqLLM(llm) => llm.generate(prompt).await,
+            LLM::OpenAILLM(llm) => llm.generate(prompt).await,
+            LLM::HuggingFaceLLM(llm) => llm.generate(prompt).await,
         }
     }
 }
@@ -110,6 +113,11 @@ impl LLMFactory {
                         registry.register(key.to_string(), llm.clone());
                         Ok(llm.clone())
                     }
+                    "openai" => {
+                        let llm = &LLM::OpenAILLM(OpenAILLM::new(self.config.clone(), String::from("gpt-4o-mini")));
+                        registry.register(key.to_string(), llm.clone());
+                        Ok(llm.clone())
+                    }
                     _ => {
                         Err(AgentFactoryError {id: 0, code: 0})
                     }
@@ -153,31 +161,39 @@ mod tests {
 
         let factory = LLMFactory::new(config);
 
-        let result4 = factory.instance("anthropic").unwrap().execute(&Prompt {
+        let result5 = factory.instance("openai").unwrap().execute(&Prompt {
             user: String::from("Tell me what your job is?"),
             system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
         }).await.unwrap();
+        info!("anthropic: {:?}", result5);
 
-        let result = factory.instance("cerebras").unwrap().execute(&Prompt {
-            user: String::from("Tell me what your job is?"),
-            system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
-        }).await.unwrap();
+        // let result4 = factory.instance("anthropic").unwrap().execute(&Prompt {
+        //     user: String::from("Tell me what your job is?"),
+        //     system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
+        // }).await.unwrap();
+        // info!("anthropic: {:?}", result4);
 
-        let result2 = factory.instance("groq").unwrap().execute(&Prompt {
-            user: String::from("Tell me what your job is?"),
-            system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
-        }).await.unwrap();
+        // let result = factory.instance("cerebras").unwrap().execute(&Prompt {
+        //     user: String::from("Tell me what your job is?"),
+        //     system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
+        // }).await.unwrap();
+        // info!("cerebras: {:?}", result);
+        //
+        // let result2 = factory.instance("groq").unwrap().execute(&Prompt {
+        //     user: String::from("Tell me what your job is?"),
+        //     system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
+        // }).await.unwrap();
+        // info!("groq: {:?}", result2);
 
-        let result3 = factory.instance("gemini").unwrap().execute(&Prompt {
-            user: String::from("Tell me what your job is?"),
-            system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
-        }).await.unwrap();
+        // let result3 = factory.instance("gemini").unwrap().execute(&Prompt {
+        //     user: String::from("Tell me what your job is?"),
+        //     system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
+        // }).await.unwrap();
 
 
-        info!("cerebras: {:?}", result);
-        info!("groq: {:?}", result2);
-        info!("gemini: {:?}", result3);
-        info!("anthropic: {:?}", result4);
-        assert_eq!(result.message.clone(), result.message);
+
+
+        // info!("gemini: {:?}", result3);
+        // assert_eq!(result.message.clone(), result.message);
     }
 }

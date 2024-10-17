@@ -1,20 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::llm::anthropic_llm::AnthropicGenerateResponse;
-use crate::llm::openai_llm::OpenAIGenerateResponse;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Prompt {
-    pub system: String,
-    pub user: String,
-}
-
-
-impl Prompt {
-    pub fn new(system: String, user: String) -> Self {
-        Self { system, user }
-    }
-}
+use crate::llm::openai_llm::{AssistantContent, AssistantToolCall, OpenAIGenerateResponse, UserContent};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LLMResult {
@@ -129,5 +116,5 @@ impl LLMResult {
 
 pub trait GenerateText {
 
-    async fn generate_text(&self, prompt: &Prompt) -> agentsmith_common::error::error::Result<LLMResult>;
+    async fn generate(&self, prompt: &Prompt) -> agentsmith_common::error::error::Result<LLMResult>;
 }

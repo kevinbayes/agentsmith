@@ -3,13 +3,19 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Prompt {
-    Simple { system: String, user: String },
-    Messages { system: String, messages: Vec<PromptMessage> }
+    Simple { system: String, user: String, tools: Option<Vec<Tool>>, tool_choice: Option<ToolChoice> },
+    Messages { system: String, messages: Vec<PromptMessage>, tools: Option<Vec<Tool>>, tool_choice: Option<ToolChoice> }
 }
 
 impl Prompt {
-    pub fn new(system: String, user: String) -> Self {
-        Self::Simple { system, user }
+    pub fn new_simple(system: String, user: String) -> Self {
+        Self::Simple { system, user, tools: None, tool_choice: None }
+    }
+    pub fn new_simple_with_tools(system: String, user: String) -> Self {
+        Self::Simple { system, user, tools: None, tool_choice: None }
+    }
+    pub fn new_message(system: String, messages: Vec<PromptMessage>, tool_choice: ToolChoice, tools: Vec<Tool>, ) -> Self {
+        Self::Messages { system, messages, tools: Some(tools), tool_choice: Some(tool_choice) }
     }
 }
 
@@ -111,6 +117,8 @@ pub enum ToolChoice {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Tool {
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
     pub name: String,
     pub description: String,
     pub input_schema: Value,

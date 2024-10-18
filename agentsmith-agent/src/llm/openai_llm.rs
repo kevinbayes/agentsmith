@@ -46,7 +46,7 @@ impl OpenAIRequest {
     pub(crate) fn from_prompt(config: &LLMConfiguration, prompt: &Prompt) -> Self {
 
         match prompt {
-            Prompt::Simple { system, user } => {
+            Prompt::Simple { system, user, tools, tool_choice } => {
 
                 let system = system.clone();
                 let user = user.clone();
@@ -71,7 +71,7 @@ impl OpenAIRequest {
                     tools: None,
                 }
             }
-            Prompt::Messages { system, messages } => {
+            Prompt::Messages { system, messages, tools, tool_choice } => {
 
                 let system = system.clone();
                 let messages = messages.clone();

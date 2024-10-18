@@ -118,7 +118,6 @@ impl LLMFactory {
                         Ok(llm.clone())
                     }
                     "openai" => {
-                        //"gpt-4o-mini"
                         let llm = &LLM::OpenAILLM(OpenAILLM::new(self.config.clone(), config));
                         registry.register(key.to_string(), llm.clone());
                         Ok(llm.clone())
@@ -172,6 +171,11 @@ mod tests {
             .unwrap()
             .clone();
 
+        let prompt5 = Prompt::new_simple(
+            String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals."),
+            String::from("Tell me what your job is?"),
+        );
+
         let result5 = factory.instance("openai", LLMConfiguration {
             base_url: None,
             model: "gpt-4o-mini".to_string(),
@@ -184,10 +188,7 @@ mod tests {
             seed: None,
             max_tokens: Some(4),
             stream: Some(false),
-        }).unwrap().execute(&Prompt::Simple {
-            user: String::from("Tell me what your job is?"),
-            system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
-        }).await.unwrap();
+        }).unwrap().execute(&prompt5).await.unwrap();
         info!("anthropic: {:?}", result5);
 
         // let result4 = factory.instance("anthropic").unwrap().execute(&Prompt {

@@ -108,14 +108,14 @@ impl GenerateText for GeminiLLM {
 
 
         let prompt = match prompt {
-            Prompt::Simple { system, user } => {
+            Prompt::Simple { system, user, tools, tool_choice } => {
 
                 let system = system.clone();
                 let user = user.clone();
 
                 format!("\n{}\n{}\n", system, user)
             }
-            Prompt::Messages { system, messages } => {
+            Prompt::Messages { system, messages, tools, tool_choice } => {
 
                 format!("")
             }

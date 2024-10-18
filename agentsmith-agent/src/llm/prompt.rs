@@ -107,6 +107,11 @@ pub enum ToolChoice {
         type_: String,
         disable_parallel_tool_use: Option<bool>,
     },
+    Required {
+        #[serde(rename = "type")]
+        type_: String,
+        disable_parallel_tool_use: Option<bool>,
+    },
     Tool {
         #[serde(rename = "type")]
         type_: String,

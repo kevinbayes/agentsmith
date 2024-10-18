@@ -8,9 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use r2d2_redis::redis::Commands;
 use tracing::info;
 use tracing_subscriber;
-use crate::llm::prompt::{Prompt, PromptMessage, UserContent as PromptUserContent, AssistantContent as PromptAssistantContent, AssistantToolCall as PromptAssistantToolCall};
+use crate::llm::prompt::{Prompt, PromptMessage, UserContent as PromptUserContent, AssistantContent as PromptAssistantContent, AssistantToolCall as PromptAssistantToolCall, Tool as PromptTool, ToolChoice as PromptToolChoice};
 
 #[derive(Clone, Debug)]
 pub struct OpenAILLM {
@@ -39,6 +40,8 @@ pub struct OpenAIRequest {
     pub tool_choice: Option<ToolChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
 impl OpenAIRequest {
@@ -69,6 +72,7 @@ impl OpenAIRequest {
                     top_p: config.top_p.clone().unwrap_or(1),
                     tool_choice: None,
                     tools: None,
+                    parallel_tool_calls: None,
                 }
             }
             Prompt::Messages { system, messages, tools, tool_choice } => {
@@ -87,6 +91,48 @@ impl OpenAIRequest {
                 let other_messages: Vec<OpenAIRequestMessage> = messages.iter().map(OpenAIRequestMessage::from_prompt_message).collect();
                 request_messages.extend(other_messages);
 
+                let converted_tools = &if tools.is_none() {
+                    None
+                } else {
+                    Some(tools.clone().unwrap().iter().map(|item| Tool::from_prompt(item)).collect())
+                };
+
+                let mut parallel_tool_calls: Option<bool> = None;
+
+                let is_empty_tools = converted_tools.clone().unwrap_or(vec![]).is_empty();
+
+                let tool_choice = if is_empty_tools {
+                    None
+                } else {
+                    match tool_choice {
+                        Some(choice) => {
+                            match choice.clone() {
+                                PromptToolChoice::Any { disable_parallel_tool_use, .. } => {
+                                    parallel_tool_calls = disable_parallel_tool_use;
+                                    None
+                                },
+                                PromptToolChoice::Auto { disable_parallel_tool_use, .. } => {
+                                    parallel_tool_calls = disable_parallel_tool_use;
+                                    None
+                                },
+                                PromptToolChoice::Required { type_, disable_parallel_tool_use } => {
+                                    parallel_tool_calls = disable_parallel_tool_use;
+                                    Some(ToolChoice::String("required".to_string()))
+                                },
+                                PromptToolChoice::Tool { type_, name, disable_parallel_tool_use } => {
+                                    parallel_tool_calls = disable_parallel_tool_use;
+                                    Some(ToolChoice::Function {
+                                        type_: "function".to_string(),
+                                        name: ToolChoiceFunctionName { name },
+                                    })
+                                }
+                            }
+                        },
+                        None => None
+                    }
+                };
+
+
                 OpenAIRequest {
                     model: config.model.clone(),
                     stream: config.stream.clone().unwrap_or(false),
@@ -95,8 +141,9 @@ impl OpenAIRequest {
                     max_tokens: config.max_tokens.clone().unwrap_or(500),
                     seed: config.seed.clone().unwrap_or(0),
                     top_p: config.top_p.clone().unwrap_or(1),
-                    tool_choice: None,
-                    tools: None,
+                    tool_choice: tool_choice,
+                    tools: converted_tools.clone(),
+                    parallel_tool_calls: parallel_tool_calls,
                 }
             }
         }
@@ -266,29 +313,43 @@ impl AssistantToolCall {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ToolChoice {
-    Auto {
+    String(String),
+    Function {
         #[serde(rename = "type")]
         type_: String,
-        disable_parallel_tool_use: Option<bool>,
-    },
-    Any {
-        #[serde(rename = "type")]
-        type_: String,
-        disable_parallel_tool_use: Option<bool>,
-    },
-    Tool {
-        #[serde(rename = "type")]
-        type_: String,
-        name: String,
-        disable_parallel_tool_use: Option<bool>,
+        name: ToolChoiceFunctionName,
     },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolChoiceFunctionName {
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Tool {
+    pub type_: String,
+    pub function: ToolFunction,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolFunction {
     pub name: String,
     pub description: String,
-    pub input_schema: Value,
+    pub parameters: Value,
+}
+
+impl Tool {
+    fn from_prompt(item: &PromptTool) -> Self {
+        Self {
+            type_: "function".to_string(),
+            function: ToolFunction {
+                name: item.name.clone(),
+                description: item.description.clone(),
+                parameters: item.input_schema.clone(),
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

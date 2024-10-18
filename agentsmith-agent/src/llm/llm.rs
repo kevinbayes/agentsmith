@@ -1,7 +1,35 @@
+use crate::llm::anthropic_llm::AnthropicGenerateResponse;
+use crate::llm::openai_llm::OpenAIGenerateResponse;
+use crate::llm::prompt::Prompt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::llm::anthropic_llm::AnthropicGenerateResponse;
-use crate::llm::openai_llm::{AssistantContent, AssistantToolCall, OpenAIGenerateResponse, UserContent};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LLMConfiguration {
+    #[serde(rename = "credentials")]
+    pub credentials: LLMCredentials,
+    #[serde(rename = "model")]
+    pub base_url: Option<String>,
+    #[serde(rename = "version")]
+    pub version: Option<String>,
+    #[serde(rename = "model")]
+    pub model: String,
+    #[serde(rename = "stream")]
+    pub stream: Option<bool>,
+    #[serde(rename = "temperature")]
+    pub temperature: Option<f32>,
+    #[serde(rename = "max_tokens")]
+    pub max_tokens: Option<i32>,
+    #[serde(rename = "seed")]
+    pub seed: Option<i32>,
+    #[serde(rename = "top_p")]
+    pub top_p: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LLMCredentials {
+    pub api_key: String,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LLMResult {
@@ -26,7 +54,7 @@ impl LLMResult {
     pub fn from_cerebras(cerebras_response: &OpenAIGenerateResponse) -> Self {
 
         let response = cerebras_response.clone();
-        let choice = if response.choices.len() == 0 {
+        let choice = if response.choices.len() > 0 {
             Some(response.choices[0].clone())
         } else {
             None
@@ -34,7 +62,7 @@ impl LLMResult {
 
         match choice {
             Some(choice) => {
-                Self { message: choice.message.content.unwrap(), result: "error".to_string(), tool_calls: vec![] }
+                Self { message: choice.message.content.unwrap(), result: "".to_string(), tool_calls: vec![] }
             },
             None => {
                 Self { message: "No response received.".to_string(), result: "error".to_string(), tool_calls: vec![] }
@@ -46,7 +74,7 @@ impl LLMResult {
     pub fn from_openai(cerebras_response: &OpenAIGenerateResponse) -> Self {
 
         let response = cerebras_response.clone();
-        let choice = if response.choices.len() == 0 {
+        let choice = if response.choices.len() > 0 {
             Some(response.choices[0].clone())
         } else {
             None
@@ -54,7 +82,7 @@ impl LLMResult {
 
         match choice {
             Some(choice) => {
-                Self { message: choice.message.content.unwrap(), result: "error".to_string(), tool_calls: vec![] }
+                Self { message: choice.message.content.unwrap(), result: "".to_string(), tool_calls: vec![] }
             },
             None => {
                 Self { message: "No response received.".to_string(), result: "error".to_string(), tool_calls: vec![] }
@@ -65,7 +93,7 @@ impl LLMResult {
     pub fn from_groq(cerebras_response: &OpenAIGenerateResponse) -> Self {
 
         let response = cerebras_response.clone();
-        let choice = if response.choices.len() == 0 {
+        let choice = if response.choices.len() > 0 {
             Some(response.choices[0].clone())
         } else {
             None
@@ -73,7 +101,7 @@ impl LLMResult {
 
         match choice {
             Some(choice) => {
-                Self { message: choice.message.content.unwrap(), result: "error".to_string(), tool_calls: vec![] }
+                Self { message: choice.message.content.unwrap(), result: "".to_string(), tool_calls: vec![] }
             },
             None => {
                 Self { message: "No response received.".to_string(), result: "error".to_string(), tool_calls: vec![] }

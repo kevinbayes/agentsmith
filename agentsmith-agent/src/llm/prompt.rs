@@ -9,7 +9,7 @@ pub enum Prompt {
 
 impl Prompt {
     pub fn new(system: String, user: String) -> Self {
-        Self { system, user }
+        Self::Simple { system, user }
     }
 }
 
@@ -53,8 +53,14 @@ pub enum AssistantContent {
     Image {
         #[serde(rename = "type")]
         type_: String,
-        refusal: String,
+        content_type: Option<String>,
+        image_url: ContentImageUrl,
     },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContentImageUrl {
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,7 +74,8 @@ pub enum UserContent {
     Image {
         #[serde(rename = "type")]
         type_: String,
-        image_url: String,
+        content_type: Option<String>,
+        image_url: ContentImageUrl,
     },
 }
 

@@ -1,41 +1,40 @@
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
+use crate::llm::openai_llm::{OpenAIGenerateResponse, OpenAIRequest, OpenAIRequestMessage, UserContent};
+use crate::llm::prompt::Prompt;
+use agentsmith_common::config::config::{Config, GatewayConfig};
+use agentsmith_common::error::error::{Error, Result};
+use chrono::Local;
 use futures_util::TryFutureExt;
 use reqwest::{Proxy, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use agentsmith_common::config::config::Config;
-use crate::llm::llm::{GenerateText, LLMResult, Prompt};
-use agentsmith_common::error::error::{Error, Result};
-use chrono::Local;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tracing::info;
 use tracing_subscriber;
-use crate::llm::openai_llm::{OpenAIGenerateResponse, OpenAIRequest, OpenAIRequestMessage, UserContent};
 
 #[derive(Clone, Debug)]
 pub struct GroqLLM {
-    api_key: String,
-    base_url: String,
-    model: String,
+    global_config: GatewayConfig,
+    config: LLMConfiguration,
     client: Arc<Mutex<reqwest::Client>>,
 }
 
 impl GroqLLM {
 
-    pub fn new(config: Config, model: String) -> Self {
+    pub fn new(config: Config, llm_configuration: LLMConfiguration) -> Self {
 
         let groq_config = config.config.gateways.registry
             .get("groq_gateway")
-            .unwrap();
+            .unwrap()
+            .clone();
 
-        let api_key = groq_config.api_key.clone();
-        let base_url = groq_config.baseurl.clone();
         let client = Arc::new(Mutex::new(reqwest::ClientBuilder::new()
             .connect_timeout(Duration::from_secs(60))
             .build()
             .unwrap()));
 
-        Self { api_key, base_url, model, client }
+        Self { global_config: groq_config, config: llm_configuration, client }
     }
 
 
@@ -44,29 +43,14 @@ impl GroqLLM {
 impl GenerateText for GroqLLM {
 
     async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
-        let url_str = format!("{}/{}", self.base_url.clone(), "openai/v1/chat/completions");
-        let api_key = self.api_key.clone();
-        let model = self.model.clone();
 
-        let request_obj = OpenAIRequest {
-            model,
-            stream: false,
-            messages: vec![OpenAIRequestMessage::System {
-                role: String::from("system"),
-                content: prompt.clone().system,
-                name: None,
-            }, OpenAIRequestMessage::User {
-                role: String::from("user"),
-                content: vec![UserContent::Text { type_: "text".to_string(), text: prompt.clone().user }],
-                name: None,
-            }],
-            temperature: 1.0,
-            max_tokens: 500,
-            seed: 0,
-            top_p: 1,
-            tool_choice: None,
-            tools: None,
-        };
+        let global_config = self.global_config.clone();
+        let config = self.config.clone();
+
+        let url_str = format!("{}{}", config.base_url.clone().unwrap_or(global_config.baseurl), "/openai/v1/chat/completions");
+        let api_key = config.credentials.api_key.clone();
+
+        let request_obj = OpenAIRequest::from_prompt(&config, prompt);
 
         let client = self.client.lock().unwrap();
 
@@ -103,11 +87,8 @@ impl GenerateText for GroqLLM {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use agentsmith_common::config::config::read_config;
-    use crate::llm::openai_llm::{OpenAIGenerateResponseTimeInfo, OpenAIGenerateResponseUsage};
     use super::*;
-
+    use crate::llm::openai_llm::OpenAIGenerateResponseUsage;
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

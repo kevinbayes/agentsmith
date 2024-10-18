@@ -1,5 +1,5 @@
-use crate::llm::llm::{GenerateText, LLMResult, Prompt};
-use agentsmith_common::config::config::Config;
+use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
+use agentsmith_common::config::config::{Config, GatewayConfig};
 use agentsmith_common::error::error::{Error, Result};
 use chrono::Local;
 use futures_util::TryFutureExt;
@@ -10,12 +10,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::info;
 use tracing_subscriber;
+use crate::llm::prompt::{Prompt, PromptMessage, UserContent as PromptUserContent, AssistantContent as PromptAssistantContent, AssistantToolCall as PromptAssistantToolCall};
 
 #[derive(Clone, Debug)]
 pub struct OpenAILLM {
-    api_key: String,
-    base_url: String,
-    model: String,
+    global_config: GatewayConfig,
+    config: LLMConfiguration,
     client: Arc<Mutex<reqwest::Client>>,
 }
 
@@ -39,6 +39,68 @@ pub struct OpenAIRequest {
     pub tool_choice: Option<ToolChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
+}
+
+impl OpenAIRequest {
+
+    pub(crate) fn from_prompt(config: &LLMConfiguration, prompt: &Prompt) -> Self {
+
+        match prompt {
+            Prompt::Simple { system, user } => {
+
+                let system = system.clone();
+                let user = user.clone();
+
+                OpenAIRequest {
+                    model: config.model.clone(),
+                    stream: config.stream.clone().unwrap_or(false),
+                    messages: vec![OpenAIRequestMessage::System {
+                        role: String::from("system"),
+                        content: system,
+                        name: None,
+                    }, OpenAIRequestMessage::User {
+                        role: String::from("user"),
+                        content: vec![UserContent::Text { type_: "text".to_string(), text: user }],
+                        name: None,
+                    }],
+                    temperature: config.temperature.clone().unwrap_or(1.0),
+                    max_tokens: config.max_tokens.clone().unwrap_or(500),
+                    seed: config.seed.clone().unwrap_or(0),
+                    top_p: config.top_p.clone().unwrap_or(1),
+                    tool_choice: None,
+                    tools: None,
+                }
+            }
+            Prompt::Messages { system, messages } => {
+
+                let system = system.clone();
+                let messages = messages.clone();
+
+                let mut request_messages = vec![
+                    OpenAIRequestMessage::System {
+                        role: String::from("system"),
+                        content: system,
+                        name: None,
+                    }
+                ];
+
+                let other_messages: Vec<OpenAIRequestMessage> = messages.iter().map(OpenAIRequestMessage::from_prompt_message).collect();
+                request_messages.extend(other_messages);
+
+                OpenAIRequest {
+                    model: config.model.clone(),
+                    stream: config.stream.clone().unwrap_or(false),
+                    messages: request_messages,
+                    temperature: config.temperature.clone().unwrap_or(1.0),
+                    max_tokens: config.max_tokens.clone().unwrap_or(500),
+                    seed: config.seed.clone().unwrap_or(0),
+                    top_p: config.top_p.clone().unwrap_or(1),
+                    tool_choice: None,
+                    tools: None,
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,6 +132,45 @@ pub enum OpenAIRequestMessage {
     Tool { role: String, content: Vec<String>, name: String },
 }
 
+impl OpenAIRequestMessage {
+
+    pub fn from_prompt_message(prompt: &PromptMessage) -> Self {
+        let prompt = prompt.clone();
+        match prompt {
+            PromptMessage::System { role, content, name } => {
+                OpenAIRequestMessage::System { role, content, name }
+            }
+            PromptMessage::User { role, content, name } => {
+                let content = content.iter().map(UserContent::map_user_content).collect();
+                OpenAIRequestMessage::User { role, content, name }
+            }
+            PromptMessage::Assistant { role, content, refusal, name, tool_calls } => {
+                let content_content = if content.is_none() {
+                    None
+                } else {
+                    let content = content.unwrap().iter().map(AssistantContent::from_prompt_assistant_content).collect();
+                    Some(content)
+                };
+
+                let tool_calls = if tool_calls.is_none() {
+                    None
+                } else {
+                    Some(AssistantToolCall::from_prompt_assistant_tool_calls(tool_calls.unwrap()))
+                };
+
+                OpenAIRequestMessage::Assistant { role, content: content_content, refusal, name, tool_calls }
+            }
+            PromptMessage::Tool { role, content, name } => {
+                OpenAIRequestMessage::Tool { role, content, name }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContentImageUrl {
+    pub url: String,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -82,8 +183,29 @@ pub enum UserContent {
     Image {
         #[serde(rename = "type")]
         type_: String,
-        image_url: String,
+        image_url: ContentImageUrl,
     },
+}
+
+impl UserContent {
+
+    fn map_user_content(user_content: &PromptUserContent) -> Self {
+
+        match user_content {
+            PromptUserContent::Text { type_, text } => {
+                Self::Text {
+                    type_: type_.clone(),
+                    text: text.clone()
+                }
+            }
+            PromptUserContent::Image { type_, content_type, image_url } => {
+                Self::Image {
+                    type_: type_.clone(),
+                    image_url: ContentImageUrl { url: image_url.url.clone() },
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -97,8 +219,28 @@ pub enum AssistantContent {
     Image {
         #[serde(rename = "type")]
         type_: String,
-        refusal: String,
+        image_url: ContentImageUrl,
     },
+}
+
+impl AssistantContent {
+    pub fn from_prompt_assistant_content(content: &PromptAssistantContent) -> Self {
+
+        match content {
+            PromptAssistantContent::Text { type_, text } => {
+                AssistantContent::Text {
+                    type_: type_.clone(),
+                    text: text.clone()
+                }
+            }
+            PromptAssistantContent::Image { type_, content_type, image_url } => {
+                AssistantContent::Image {
+                    type_: type_.clone(),
+                    image_url: ContentImageUrl { url: image_url.url.clone() },
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -107,6 +249,18 @@ pub struct AssistantToolCall {
     #[serde(rename = "type")]
     pub type_: String,
     pub function: Value,
+}
+
+impl AssistantToolCall {
+
+    pub fn from_prompt_assistant_tool_calls(tool_call: PromptAssistantToolCall) -> Self {
+
+        Self {
+            function: tool_call.function.clone(),
+            id: tool_call.id,
+            type_: tool_call.type_,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -181,21 +335,19 @@ pub struct OpenAIGenerateResponseTimeInfo {
 
 
 impl OpenAILLM {
-    pub fn new(config: Config, model: String) -> Self {
+    pub fn new(config: Config, llm_config: LLMConfiguration) -> Self {
 
         let openai_config = config.config.gateways.registry
             .get("openai_gateway")
-            .unwrap();
-
-        let api_key = openai_config.api_key.clone();
-        let base_url = openai_config.baseurl.clone();
+            .unwrap()
+            .clone();
 
         let client = Arc::new(Mutex::new(reqwest::ClientBuilder::new()
             .connect_timeout(Duration::from_secs(60))
             .build()
             .unwrap()));
 
-        Self { api_key, base_url, model, client }
+        Self { global_config: openai_config, config: llm_config, client }
     }
 }
 
@@ -203,29 +355,13 @@ impl GenerateText for OpenAILLM {
 
     async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
 
-        let url_str = format!("{}{}", self.base_url.clone(), "/v1/chat/completions");
-        let api_key = self.api_key.clone();
-        let model = self.model.clone();
+        let global_config = self.global_config.clone();
+        let config = self.config.clone();
 
-        let request_obj = OpenAIRequest {
-            model,
-            stream: false,
-            messages: vec![OpenAIRequestMessage::System {
-                role: String::from("system"),
-                content: prompt.clone().system,
-                name: None,
-            }, OpenAIRequestMessage::User {
-                role: String::from("user"),
-                content: vec![UserContent::Text { type_: "text".to_string(), text: prompt.clone().user }],
-                name: None,
-            }],
-            temperature: 1.0,
-            max_tokens: 500,
-            seed: 0,
-            top_p: 1,
-            tool_choice: None,
-            tools: None,
-        };
+        let url_str = format!("{}{}", config.base_url.clone().unwrap_or(global_config.baseurl), "/v1/chat/completions");
+        let api_key = config.credentials.api_key.clone();
+
+        let request_obj = OpenAIRequest::from_prompt(&config, prompt);
 
         let client = self.client.lock().unwrap();
 

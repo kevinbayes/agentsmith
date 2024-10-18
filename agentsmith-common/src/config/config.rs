@@ -44,6 +44,8 @@ pub struct GatewayConfig {
     pub baseurl: String,
     #[serde(rename = "apiKey")]
     pub api_key: String,
+    #[serde(rename = "model")]
+    pub model: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

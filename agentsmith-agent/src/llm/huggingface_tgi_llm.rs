@@ -1,10 +1,9 @@
+use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
+use crate::llm::prompt::Prompt;
+use agentsmith_common::config::config::Config;
+use agentsmith_common::error::error::Result;
 use std::sync::Arc;
 use std::time::Duration;
-use futures_util::TryFutureExt;
-use serde::{Deserialize, Serialize};
-use agentsmith_common::config::config::Config;
-use crate::llm::llm::{GenerateText, LLMResult, Prompt};
-use agentsmith_common::error::error::{Error, Result};
 
 #[derive(Clone, Debug)]
 pub struct HuggingFaceLLM {
@@ -15,7 +14,7 @@ pub struct HuggingFaceLLM {
 
 impl HuggingFaceLLM {
 
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, llm_configuration: LLMConfiguration) -> Self {
 
         let gemini_config = config.config.gateways.registry
             .get("gemini_gateway")

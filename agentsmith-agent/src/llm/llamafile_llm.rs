@@ -83,7 +83,7 @@ struct GeminiGenerateResponseCandidateContentPart {
 
 impl GeminiLLM {
 
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, llm_configuration: LLMConfiguration) -> Self {
 
         let gemini_config = config.config.gateways.registry
             .get("gemini_gateway")

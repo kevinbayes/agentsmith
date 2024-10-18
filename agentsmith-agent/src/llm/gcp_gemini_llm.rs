@@ -4,14 +4,17 @@ use futures_util::TryFutureExt;
 use reqwest::{Proxy, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use agentsmith_common::config::config::Config;
-use crate::llm::llm::{GenerateText, LLMResult, Prompt};
+use agentsmith_common::config::config::{Config, GatewayConfig};
+use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
+
 use agentsmith_common::error::error::{Error, Result};
+use crate::llm::openai_llm::{OpenAIRequest, OpenAIRequestMessage, UserContent};
+use crate::llm::prompt::Prompt;
 
 #[derive(Clone, Debug)]
 pub struct GeminiLLM {
-    api_key: String,
-    base_url: String,
+    global_config: GatewayConfig,
+    config: LLMConfiguration,
     client: Arc<reqwest::Client>,
 }
 
@@ -76,61 +79,81 @@ struct GeminiGenerateResponseCandidateContentPart {
 
 impl GeminiLLM {
 
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, llm_configuration: LLMConfiguration) -> Self {
 
         let gemini_config = config.config.gateways.registry
             .get("gemini_gateway")
-            .unwrap();
+            .unwrap()
+            .clone();
 
-        let api_key = gemini_config.api_key.clone();
-        let base_url = gemini_config.baseurl.clone();
         let client = Arc::new(reqwest::ClientBuilder::new()
             .connect_timeout(Duration::from_secs(60))
             .build()
             .unwrap());
 
-        Self { base_url, api_key, client }
+        Self { global_config: gemini_config, config: llm_configuration, client }
     }
-
-
 }
 
 impl GenerateText for GeminiLLM {
 
     async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
-        let url_str = format!("{}{}?key={}", &self.base_url, "/v1beta/models/gemini-pro:generateText", &self.api_key.clone());
-        let url_str = format!("{}{}", &self.base_url, "/v1beta/models/gemini-pro:generateContent");
 
-        let prompt_str = format!("\n{}\n{}\n", prompt.clone().system, prompt.clone().user);
+        let global_config = self.global_config.clone();
+        let config = self.config.clone();
 
-        let request = GeminiGenerateRequest {
-            contents: vec![GeminiGenerateRequestContent {
-                parts: vec![GeminiGenerateRequestContentPart {
-                    text: prompt_str,
-                }],
-            }],
+        // let url_str = format!("{}{}?key={}", &self.base_url, "/v1beta/models/gemini-pro:generateText", &self.api_key.clone());
+        let url_str = format!("{}{}", config.base_url.unwrap_or(global_config.baseurl), "/v1beta/models/gemini-pro:generateContent");
+        let api_key = config.credentials.api_key.clone();
+
+
+        let prompt = match prompt {
+            Prompt::Simple { system, user } => {
+
+                let system = system.clone();
+                let user = user.clone();
+
+                format!("\n{}\n{}\n", system, user)
+            }
+            Prompt::Messages { system, messages } => {
+
+                format!("")
+            }
         };
 
+        if prompt.len() == 0 {
+            Err(Error::LLMError { id: 0, code: 0 })
+        } else {
 
-        let res = self.client.post(url_str)
-            .query(&[("key", &self.api_key.clone())])
-            .json(&request)
-            .send()
-            .map_err(|e| {
-                println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 1 }
-            })
-            .await?
-            .json::<GeminiGenerateResponse>()
-            .map_err(|e| {
-                println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 2 }
-            })
-            .await?;
+            let request = GeminiGenerateRequest {
+                contents: vec![GeminiGenerateRequestContent {
+                    parts: vec![GeminiGenerateRequestContentPart {
+                        text: prompt,
+                    }],
+                }],
+            };
 
-        let response = &res.candidates[0].content.parts[0].text;
 
-        Ok(LLMResult::new(response.clone()))
+            let res = self.client.post(url_str)
+                .query(&[("key", api_key)])
+                .json(&request)
+                .send()
+                .map_err(|e| {
+                    println!("Error: {:?}", e);
+                    Error::AgentError { id: 0, code: 1 }
+                })
+                .await?
+                .json::<GeminiGenerateResponse>()
+                .map_err(|e| {
+                    println!("Error: {:?}", e);
+                    Error::AgentError { id: 0, code: 2 }
+                })
+                .await?;
+
+            let response = &res.candidates[0].content.parts[0].text;
+
+            Ok(LLMResult::new(response.clone()))
+        }
     }
 }
 

@@ -4,18 +4,18 @@ use futures_util::TryFutureExt;
 use reqwest::{Proxy, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use agentsmith_common::config::config::Config;
-use crate::llm::llm::{GenerateText, LLMResult, Prompt};
+use agentsmith_common::config::config::{Config, GatewayConfig};
+use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
 use agentsmith_common::error::error::{Error, Result};
 use chrono::Local;
 use tracing::info;
 use tracing_subscriber;
+use crate::llm::prompt::{AssistantContent,UserContent, Prompt, PromptMessage};
 
 #[derive(Clone, Debug)]
 pub struct AnthropicLLM {
-    api_key: String,
-    base_url: String,
-    model: String,
+    global_config: GatewayConfig,
+    config: LLMConfiguration,
     client: Arc<Mutex<reqwest::Client>>,
 }
 
@@ -23,6 +23,27 @@ pub struct AnthropicLLM {
 pub struct AnthropicMessage {
     pub role: Role,
     pub content: Vec<AnthropicMessageContent>,
+}
+
+impl AnthropicMessage {
+
+    pub fn from_prompt_message(prompt: &PromptMessage) -> Self {
+        let prompt = prompt.clone();
+        match prompt {
+            PromptMessage::User { role, content, name } => {
+
+                let content = content.iter().map(AnthropicMessageContent::map_from_content).collect();
+                Self { role: Role::User, content, }
+            }
+            PromptMessage::Assistant { role, content, refusal, name, tool_calls } => {
+                let content = content.unwrap().iter().map(AnthropicMessageContent::map_assistant_content).collect();
+                Self { role: Role::Assistant, content, }
+            }
+            _ => {
+                Self { role: Role::User, content: vec![], }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -55,6 +76,39 @@ pub enum AnthropicMessageContent {
         #[serde(skip_serializing_if = "Option::is_none")]
         content: Option<Value>,
     },
+}
+
+impl AnthropicMessageContent {
+    fn map_from_content(content: &UserContent) -> Self {
+        match content {
+            UserContent::Text { text, type_} => {
+                Self::Text {type_: type_.clone(), text: text.clone()}
+            }
+            UserContent::Image { content_type, image_url, type_ } => {
+                let image_url = image_url.clone();
+                Self::Image { type_: type_.clone(), source: AnthropicMessageContentSource {
+                    type_: "base64".to_string(),
+                    media_type: content_type.clone().unwrap_or("image/png".to_string()),
+                    data: image_url.url
+                } }
+            }
+        }
+    }
+    fn map_assistant_content(content: &AssistantContent) -> Self {
+        match content {
+            AssistantContent::Text { text, type_ } => {
+                Self::Text {type_: type_.clone(), text: text.clone()}
+            }
+            AssistantContent::Image { content_type, image_url, type_ } => {
+                let image_url = image_url.clone();
+                Self::Image { type_: type_.clone(), source: AnthropicMessageContentSource {
+                    type_: "base64".to_string(),
+                    media_type: content_type.clone().unwrap_or("image/png".to_string()),
+                    data: image_url.url
+                } }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -130,6 +184,28 @@ pub struct AnthropicRequest {
     pub metadata: Option<AnthropicMetadata>,
     pub messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+}
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AnthropicConfig {
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<AnthropicMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
@@ -143,6 +219,63 @@ pub struct AnthropicRequest {
     pub tool_choice: Option<ToolChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Tool>>,
+}
+
+impl AnthropicRequest {
+
+    fn from_prompt(config: &LLMConfiguration, prompt: &Prompt) -> Self {
+
+        let config = config.clone();
+
+        match prompt {
+            Prompt::Simple { system, user } => {
+
+                let system = system.clone();
+                let user = user.clone();
+
+                AnthropicRequest {
+                    model: config.model,
+                    stream: Some(false),
+                    tool_choice: None,
+                    system: system,
+                    metadata: None,
+                    messages: vec![AnthropicMessage {
+                        role: Role::User,
+                        content: vec![AnthropicMessageContent::Text {
+                            type_: String::from("text"),
+                            text: user
+                        }],
+                    }],
+                    temperature: config.temperature,
+                    max_tokens: config.max_tokens,
+                    top_p: None,
+                    stop_sequences: None,
+                    tools: None,
+                }
+            }
+            Prompt::Messages { system, messages } => {
+
+                let system = system.clone();
+                let messages = messages.clone();
+
+                let request_messages: Vec<AnthropicMessage> = messages.iter().map(AnthropicMessage::from_prompt_message).collect();
+
+                AnthropicRequest {
+                    model: config.model,
+                    stream: Some(false),
+                    tool_choice: None,
+                    system: system,
+                    metadata: None,
+                    messages: request_messages,
+                    temperature: Some(1.0),
+                    max_tokens: Some(500),
+                    top_p: Some(1.0),
+                    stop_sequences: None,
+                    tools: None,
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -181,53 +314,39 @@ pub struct AnthropicError {
 
 
 impl AnthropicLLM {
-    pub fn new(config: Config, model: String) -> Self {
-        let anthropic_config = config.config.gateways.registry
-            .get("anthropic_gateway")
-            .unwrap();
+    pub fn new(config: Config, llm_configuration: LLMConfiguration) -> Self {
 
-        let api_key = anthropic_config.api_key.clone();
-        let base_url = anthropic_config.baseurl.clone();
+        let global_config = config.config.gateways.registry
+            .get("anthropic_gateway")
+            .unwrap()
+            .clone();
+
         let client = Arc::new(Mutex::new(reqwest::ClientBuilder::new()
             .connect_timeout(Duration::from_secs(60))
             .build()
             .unwrap()));
 
-        Self { api_key, base_url, model, client }
+        Self { global_config: global_config, config: llm_configuration, client }
     }
 }
 
 impl GenerateText for AnthropicLLM {
     async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
-        let url_str = format!("{}{}", self.base_url.clone(), "/v1/messages");
-        let api_key = self.api_key.clone();
-        let model = self.model.clone();
 
-        let request_obj = AnthropicRequest {
-            model,
-            stream: Some(false),
-            tool_choice: None,
-            system: prompt.clone().system,
-            metadata: None,
-            messages: vec![AnthropicMessage {
-                role: Role::User,
-                content: vec![AnthropicMessageContent::Text {
-                    type_: String::from("text"),
-                    text: prompt.clone().system
-                }],
-            }],
-            temperature: Some(1.0),
-            max_tokens: Some(500),
-            top_p: Some(1.0),
-            stop_sequences: None,
-            tools: None,
-        };
+        let global_config = self.global_config.clone();
+        let config = self.config.clone();
+
+        let url_str = format!("{}{}", config.base_url.unwrap_or(global_config.baseurl), "/v1/messages");
+        let api_key = config.credentials.api_key.clone();
+        let api_version = config.version.unwrap_or("2023-06-01".to_string());
+
+        let request_obj = AnthropicRequest::from_prompt(&self.config, prompt);
 
         let client = self.client.lock().unwrap();
 
         let request = client.post(&url_str)
             .header("User-Agent", "AgentSmith Framework".to_string())
-            .header("anthropic-version", "2023-06-01".to_string())
+            .header("anthropic-version", api_version)
             .header("x-api-key", format!("{}", api_key))
             .header("Content-Type", "application/json".to_string())
             .json(&request_obj)

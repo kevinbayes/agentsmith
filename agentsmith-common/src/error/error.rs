@@ -10,6 +10,10 @@ pub enum Error {
     LoginFail,
     JwksError,
 
+    //LLM
+    LLMFactoryError { id: u8, code: u16 },
+    LLMError { id: u8, code: u16 },
+
     //Agent
     AgentFactoryError { id: u8, code: u16 },
     AgentError { id: u8, code: u16 },

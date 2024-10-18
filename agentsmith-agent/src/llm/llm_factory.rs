@@ -6,12 +6,13 @@ use log::info;
 use agentsmith_common::error::error::Error::AgentFactoryError;
 use crate::llm::anthropic_llm::AnthropicLLM;
 use crate::llm::gcp_gemini_llm::GeminiLLM;
-use crate::llm::llm::{GenerateText, LLMResult, Prompt};
+use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
 
 use crate::llm::cerebras_llm::CerebrasLLM;
 use crate::llm::groq_llm::GroqLLM;
 use crate::llm::huggingface_tgi_llm::HuggingFaceLLM;
 use crate::llm::openai_llm::OpenAILLM;
+use crate::llm::prompt::Prompt;
 
 #[derive(Clone, Debug)]
 pub enum LLM {
@@ -81,7 +82,7 @@ impl LLMFactory {
         }
     }
 
-    pub fn instance(&self, key: &str) -> agentsmith_common::error::error::Result<LLM> {
+    pub fn instance(&self, key: &str, config: LLMConfiguration) -> agentsmith_common::error::error::Result<LLM> {
 
         let mut registry = self.registry.lock().unwrap();
 
@@ -92,29 +93,33 @@ impl LLMFactory {
             _ => {
                 match key {
                     "anthropic" => {
-                        let llm = &LLM::AnthropicLLM(AnthropicLLM::new(self.config.clone(), String::from("claude-3-5-sonnet-20240620")));
+                        //"claude-3-5-sonnet-20240620"
+                        let llm = &LLM::AnthropicLLM(AnthropicLLM::new(self.config.clone(), config));
                         registry.register(key.to_string(), llm.clone());
 
                         Ok(llm.clone())
                     }
                     "cerebras" => {
-                        let llm = &LLM::CerebrasLLM(CerebrasLLM::new(self.config.clone(), String::from("llama3.1-8b")));
+                        //"llama3.1-8b"
+                        let llm = &LLM::CerebrasLLM(CerebrasLLM::new(self.config.clone(), config));
                         registry.register(key.to_string(), llm.clone());
 
                         Ok(llm.clone())
                     }
                     "gemini" => {
-                        let llm = &LLM::GeminiLLM(GeminiLLM::new(self.config.clone()));
+                        let llm = &LLM::GeminiLLM(GeminiLLM::new(self.config.clone(), config));
                         registry.register(key.to_string(), llm.clone());
                         Ok(llm.clone())
                     }
                     "groq" => {
-                        let llm = &LLM::GroqLLM(GroqLLM::new(self.config.clone(), String::from("llama-3.1-8b-instant")));
+                        //"llama-3.1-8b-instant"
+                        let llm = &LLM::GroqLLM(GroqLLM::new(self.config.clone(), config));
                         registry.register(key.to_string(), llm.clone());
                         Ok(llm.clone())
                     }
                     "openai" => {
-                        let llm = &LLM::OpenAILLM(OpenAILLM::new(self.config.clone(), String::from("gpt-4o-mini")));
+                        //"gpt-4o-mini"
+                        let llm = &LLM::OpenAILLM(OpenAILLM::new(self.config.clone(), config));
                         registry.register(key.to_string(), llm.clone());
                         Ok(llm.clone())
                     }
@@ -137,6 +142,7 @@ mod tests {
     use testcontainers::{GenericImage, ImageExt};
     use testcontainers::runners::AsyncRunner;
     use agentsmith_common::config::config::read_config;
+    use crate::llm::llm::LLMCredentials;
     use super::*;
 
 
@@ -159,9 +165,26 @@ mod tests {
 
         let config = read_config("./secret-config.json").unwrap();
 
-        let factory = LLMFactory::new(config);
+        let factory = LLMFactory::new(config.clone());
 
-        let result5 = factory.instance("openai").unwrap().execute(&Prompt {
+        let openai_config = config.clone().config.gateways.registry
+            .get("openai_gateway")
+            .unwrap()
+            .clone();
+
+        let result5 = factory.instance("openai", LLMConfiguration {
+            base_url: None,
+            model: "gpt-4o-mini".to_string(),
+            temperature: None,
+            credentials: LLMCredentials {
+                api_key: openai_config.api_key
+            },
+            version: None,
+            top_p: None,
+            seed: None,
+            max_tokens: Some(4),
+            stream: Some(false),
+        }).unwrap().execute(&Prompt::Simple {
             user: String::from("Tell me what your job is?"),
             system: String::from("You are a helpful assistant to a financial banker who screens fraudulent individuals.")
         }).await.unwrap();

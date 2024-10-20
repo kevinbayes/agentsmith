@@ -54,6 +54,14 @@ impl OpenAIRequest {
                 let system = system.clone();
                 let user = user.clone();
 
+                let converted_tools = &Self::resolve_tools(tools);
+
+                let is_empty_tools = converted_tools.clone().unwrap_or(vec![]).is_empty();
+
+                let tool_result = Self::resolve_tool_choice(tool_choice, is_empty_tools);
+                let tool_choice: Option<ToolChoice> = tool_result.0;
+                let parallel_tool_calls: Option<bool> = tool_result.1;
+
                 OpenAIRequest {
                     model: config.model.clone(),
                     stream: config.stream.clone().unwrap_or(false),
@@ -70,9 +78,9 @@ impl OpenAIRequest {
                     max_tokens: config.max_tokens.clone().unwrap_or(500),
                     seed: config.seed.clone().unwrap_or(0),
                     top_p: config.top_p.clone().unwrap_or(1),
-                    tool_choice: None,
-                    tools: None,
-                    parallel_tool_calls: None,
+                    tool_choice: tool_choice,
+                    tools: converted_tools.clone(),
+                    parallel_tool_calls: parallel_tool_calls,
                 }
             }
             Prompt::Messages { system, messages, tools, tool_choice } => {
@@ -91,47 +99,13 @@ impl OpenAIRequest {
                 let other_messages: Vec<OpenAIRequestMessage> = messages.iter().map(OpenAIRequestMessage::from_prompt_message).collect();
                 request_messages.extend(other_messages);
 
-                let converted_tools = &if tools.is_none() {
-                    None
-                } else {
-                    Some(tools.clone().unwrap().iter().map(|item| Tool::from_prompt(item)).collect())
-                };
-
-                let mut parallel_tool_calls: Option<bool> = None;
+                let converted_tools = &Self::resolve_tools(tools);
 
                 let is_empty_tools = converted_tools.clone().unwrap_or(vec![]).is_empty();
 
-                let tool_choice = if is_empty_tools {
-                    None
-                } else {
-                    match tool_choice {
-                        Some(choice) => {
-                            match choice.clone() {
-                                PromptToolChoice::Any { disable_parallel_tool_use, .. } => {
-                                    parallel_tool_calls = disable_parallel_tool_use;
-                                    None
-                                },
-                                PromptToolChoice::Auto { disable_parallel_tool_use, .. } => {
-                                    parallel_tool_calls = disable_parallel_tool_use;
-                                    None
-                                },
-                                PromptToolChoice::Required { type_, disable_parallel_tool_use } => {
-                                    parallel_tool_calls = disable_parallel_tool_use;
-                                    Some(ToolChoice::String("required".to_string()))
-                                },
-                                PromptToolChoice::Tool { type_, name, disable_parallel_tool_use } => {
-                                    parallel_tool_calls = disable_parallel_tool_use;
-                                    Some(ToolChoice::Function {
-                                        type_: "function".to_string(),
-                                        name: ToolChoiceFunctionName { name },
-                                    })
-                                }
-                            }
-                        },
-                        None => None
-                    }
-                };
-
+                let tool_result = Self::resolve_tool_choice(tool_choice, is_empty_tools);
+                let tool_choice: Option<ToolChoice> = tool_result.0;
+                let parallel_tool_calls: Option<bool> = tool_result.1;
 
                 OpenAIRequest {
                     model: config.model.clone(),
@@ -147,6 +121,52 @@ impl OpenAIRequest {
                 }
             }
         }
+    }
+
+    fn resolve_tools(tools: &Option<Vec<PromptTool>>) -> Option<Vec<Tool>> {
+        let converted_tools = if tools.is_none() {
+            None
+        } else {
+            Some(tools.clone().unwrap().iter().map(|item| Tool::from_prompt(item)).collect())
+        };
+        converted_tools
+    }
+
+    fn resolve_tool_choice(tool_choice: &Option<PromptToolChoice>, is_empty_tools: bool) -> (Option<ToolChoice>, Option<bool>) {
+
+        let mut parallel_tool_calls: Option<bool> = None;
+
+        let tool_choice = if is_empty_tools {
+            None
+        } else {
+            match tool_choice {
+                Some(choice) => {
+                    match choice.clone() {
+                        PromptToolChoice::Any { disable_parallel_tool_use, .. } => {
+                            parallel_tool_calls = disable_parallel_tool_use;
+                            None
+                        },
+                        PromptToolChoice::Auto { disable_parallel_tool_use, .. } => {
+                            parallel_tool_calls = disable_parallel_tool_use;
+                            None
+                        },
+                        PromptToolChoice::Required { type_, disable_parallel_tool_use } => {
+                            parallel_tool_calls = disable_parallel_tool_use;
+                            Some(ToolChoice::String("required".to_string()))
+                        },
+                        PromptToolChoice::Tool { type_, name, disable_parallel_tool_use } => {
+                            parallel_tool_calls = disable_parallel_tool_use;
+                            Some(ToolChoice::Function {
+                                type_: "function".to_string(),
+                                name: ToolChoiceFunctionName { name },
+                            })
+                        }
+                    }
+                },
+                None => None
+            }
+        };
+        (tool_choice, parallel_tool_calls)
     }
 }
 
@@ -328,6 +348,7 @@ pub struct ToolChoiceFunctionName {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Tool {
+    #[serde(rename = "type")]
     pub type_: String,
     pub function: ToolFunction,
 }

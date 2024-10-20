@@ -10,7 +10,8 @@ use agentsmith_common::error::error::{Error, Result};
 use chrono::Local;
 use tracing::info;
 use tracing_subscriber;
-use crate::llm::prompt::{AssistantContent,UserContent, Prompt, PromptMessage};
+use crate::llm::openai_llm::{ToolChoiceFunctionName, ToolFunction};
+use crate::llm::prompt::{AssistantContent, UserContent, Prompt, PromptMessage};
 
 #[derive(Clone, Debug)]
 pub struct AnthropicLLM {
@@ -175,6 +176,17 @@ pub struct Tool {
     pub input_schema: Value,
 }
 
+impl Tool {
+
+    fn from_prompt(item: &crate::llm::prompt::Tool) -> Self {
+        Self {
+            name: item.name.clone(),
+            description: item.description.clone(),
+            input_schema: item.input_schema.clone(),
+        }
+    }
+}
+
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AnthropicRequest {
@@ -233,10 +245,15 @@ impl AnthropicRequest {
                 let system = system.clone();
                 let user = user.clone();
 
+                let converted_tools = Self::resolve_tools(tools);
+
+                let is_empty_tools = converted_tools.clone().unwrap_or(vec![]).is_empty();
+
+                let tool_choice = Self::resolve_tool_choice(tool_choice, is_empty_tools);
+
                 AnthropicRequest {
                     model: config.model,
                     stream: Some(false),
-                    tool_choice: None,
                     system: system,
                     metadata: None,
                     messages: vec![AnthropicMessage {
@@ -250,7 +267,8 @@ impl AnthropicRequest {
                     max_tokens: config.max_tokens,
                     top_p: None,
                     stop_sequences: None,
-                    tools: None,
+                    tool_choice: tool_choice,
+                    tools: converted_tools,
                 }
             }
             Prompt::Messages { system, messages, tools, tool_choice } => {
@@ -260,10 +278,15 @@ impl AnthropicRequest {
 
                 let request_messages: Vec<AnthropicMessage> = messages.iter().map(AnthropicMessage::from_prompt_message).collect();
 
+                let converted_tools = Self::resolve_tools(tools);
+
+                let is_empty_tools = converted_tools.clone().unwrap_or(vec![]).is_empty();
+
+                let tool_choice = Self::resolve_tool_choice(tool_choice, is_empty_tools);
+
                 AnthropicRequest {
                     model: config.model,
                     stream: Some(false),
-                    tool_choice: None,
                     system: system,
                     metadata: None,
                     messages: request_messages,
@@ -271,8 +294,46 @@ impl AnthropicRequest {
                     max_tokens: Some(500),
                     top_p: Some(1.0),
                     stop_sequences: None,
-                    tools: None,
+                    tool_choice: tool_choice,
+                    tools: converted_tools,
                 }
+            }
+        }
+    }
+
+
+    fn resolve_tools(tools: &Option<Vec<crate::llm::prompt::Tool>>) -> Option<Vec<Tool>> {
+        let converted_tools = if tools.is_none() {
+            None
+        } else {
+            Some(tools.clone().unwrap().iter().map(|item| Tool::from_prompt(item)).collect())
+        };
+        converted_tools
+    }
+
+    fn resolve_tool_choice(tool_choice: &Option<crate::llm::prompt::ToolChoice>, is_empty_tools: bool) -> Option<ToolChoice> {
+
+        if is_empty_tools {
+            None
+        } else {
+            match tool_choice {
+                Some(choice) => {
+                    match choice.clone() {
+                        crate::llm::prompt::ToolChoice::Any { disable_parallel_tool_use, type_, .. } => {
+                            Some(ToolChoice::Any { type_: type_, disable_parallel_tool_use: disable_parallel_tool_use })
+                        },
+                        crate::llm::prompt::ToolChoice::Auto { disable_parallel_tool_use, type_ , .. } => {
+                            Some(ToolChoice::Auto { type_: type_, disable_parallel_tool_use: disable_parallel_tool_use })
+                        },
+                        crate::llm::prompt::ToolChoice::Required { type_, disable_parallel_tool_use } => {
+                            Some(ToolChoice::Auto { type_: type_, disable_parallel_tool_use: disable_parallel_tool_use })
+                        },
+                        crate::llm::prompt::ToolChoice::Tool { type_, name, disable_parallel_tool_use } => {
+                            Some(ToolChoice::Tool { type_: type_, name: name, disable_parallel_tool_use: disable_parallel_tool_use })
+                        }
+                    }
+                },
+                None => None
             }
         }
     }

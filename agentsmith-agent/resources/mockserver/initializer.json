@@ -144,5 +144,54 @@
         }
       }
     }
+  },
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/openai_tools/v1/messages"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "body": {
+        "id": "chatcmpl-AKGWn4r51SwhpHf85Gp9e9IOufN0l",
+        "object": "chat.completion",
+        "created": 1729393457,
+        "model": "gpt-4o-mini-2024-07-18",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call_gt8hC3LuTwpmoF9layHN9ztg",
+                  "type": "function",
+                  "function": {
+                    "name": "get_current_weather",
+                    "arguments": "{\"location\":\"Boston, MA\"}"
+                  }
+                }
+              ],
+              "refusal": null
+            },
+            "logprobs": null,
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 80,
+          "completion_tokens": 10,
+          "total_tokens": 90,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "system_fingerprint": "fp_482c22a7bc"
+      }
+    }
   }
 ]

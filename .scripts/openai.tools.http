@@ -13,6 +13,7 @@ Content-Type: application/json
 
 {
   "model": "gpt-4o-mini",
+  "max_tokens" : 500,
   "messages": [
     {
       "role": "user",
@@ -43,6 +44,46 @@ Content-Type: application/json
     }
   ],
   "tool_choice": "auto"
+}
+
+###
+
+
+POST https://api.openai.com/v1/chat/completions
+Authorization: Bearer {{ openai_token }}
+Content-Type: application/json
+
+{
+  "model": "gpt-4o-mini",
+  "max_tokens" : 500,
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather like in Boston today?"
+    }
+  ],
+  "tools": [ {
+      "type" : "function",
+      "function" : {
+          "name" : "get_current_weather",
+          "description" : "Get the current weather in a given location",
+          "parameters" : {
+              "properties" : {
+                  "location" : {
+                      "description" : "The city and state, e.g. San Francisco, CA",
+                      "type" : "string"
+                    },
+                  "unit" : {
+                      "enum" : [ "celsius", "fahrenheit" ],
+                      "type" : "string"
+                    }
+                },
+              "required" : [ "location" ],
+              "type" : "object"
+            }
+        }
+    }
+  ]
 }
 
 ###

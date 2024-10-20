@@ -1,3 +1,4 @@
+use log::info;
 use crate::llm::anthropic_llm::AnthropicGenerateResponse;
 use crate::llm::openai_llm::OpenAIGenerateResponse;
 use crate::llm::prompt::Prompt;
@@ -82,6 +83,7 @@ impl LLMResult {
 
         match choice {
             Some(choice) => {
+                info!("Creating response from {:?}", choice.clone());
                 Self { message: choice.message.content.unwrap(), result: "".to_string(), tool_calls: vec![] }
             },
             None => {

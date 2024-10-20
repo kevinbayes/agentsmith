@@ -11,8 +11,8 @@ impl Prompt {
     pub fn new_simple(system: String, user: String) -> Self {
         Self::Simple { system, user, tools: None, tool_choice: None }
     }
-    pub fn new_simple_with_tools(system: String, user: String) -> Self {
-        Self::Simple { system, user, tools: None, tool_choice: None }
+    pub fn new_simple_with_tools(system: String, user: String, tool_choice: Option<ToolChoice>, tools: Vec<Tool>) -> Self {
+        Self::Simple { system, user, tools: Some(tools), tool_choice }
     }
     pub fn new_message(system: String, messages: Vec<PromptMessage>, tool_choice: ToolChoice, tools: Vec<Tool>, ) -> Self {
         Self::Messages { system, messages, tools: Some(tools), tool_choice: Some(tool_choice) }

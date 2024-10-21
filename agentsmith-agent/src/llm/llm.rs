@@ -1,5 +1,5 @@
 use log::{debug, info};
-use crate::llm::anthropic_llm::AnthropicGenerateResponse;
+use crate::llm::anthropic_llm::{AnthropicGenerateResponse, Content};
 use crate::llm::openai_llm::OpenAIGenerateResponse;
 use crate::llm::prompt::Prompt;
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,32 @@ pub struct LLMResultToolCall {
 }
 
 impl LLMResultToolCall {
+
+    fn from_anthropic(content: Vec<Content>) -> Option<Vec<LLMResultToolCall>> {
+
+        let messages: Vec<LLMResultToolCall> = content.clone()
+            .iter()
+            .filter(|x| {
+                let x = x.clone();
+                x.clone().text.unwrap_or("".to_string()) == ("tool_use".to_string())
+            })
+            .map(|x| {
+                let x = x.clone();
+                Self {
+                    id: x.id.unwrap_or("".to_string()),
+                    type_: x.r#type,
+                    name: x.name.unwrap_or("".to_string()),
+                    input: x.input,
+                }
+            })
+            .collect();
+
+        if messages.len() == 0 {
+            None
+        } else {
+            Some(messages)
+        }
+    }
 
     fn from_openai(tool_calls: Option<Vec<Value>>) -> Option<Vec<LLMResultToolCall>> {
         match tool_calls {
@@ -175,30 +201,45 @@ impl LLMResult {
 
         let response = anthropic_generate_response.clone();
         let stop_reason = response.stop_reason;
-        let content = response.content[0].clone();
 
         match stop_reason {
             Some(stop_reason) => {
                 match stop_reason.as_str() {
                     "end_turn" => {
+                        let content = response.content[0].clone();
                         Self { message: content.text.unwrap(), result: "".to_string(), tool_calls: vec![] }
                     },
                     "max_tokens" => {
+                        let content = response.content[0].clone();
                         Self { message: content.text.unwrap(), result: "".to_string(), tool_calls: vec![] }
                     },
                     "stop_sequence" => {
+                        let content = response.content[0].clone();
                         Self { message: content.text.unwrap(), result: "".to_string(), tool_calls: vec![] }
                     },
                     "tool_use" => {
-                        Self { message: content.text.unwrap(), result: "".to_string(), tool_calls: vec![] }
+                        let content = response.content.clone();
+                        info!("Creating response from {:?}", content.clone());
+                        let message = content.clone()
+                            .iter()
+                            .find(|item| item.r#type.to_string()=="text".to_string())
+                            .map(|item| item.clone().text.unwrap_or("".to_string()))
+                            .unwrap_or("".to_string())
+                            ;
+                        let tool_calls = LLMResultToolCall::from_anthropic(content.clone())
+                            .unwrap_or(Vec::new());
+                        debug!("Creating response tools {:?}", tool_calls.clone());
+                        Self { message, result: "".to_string(), tool_calls }
                     },
                     _ => {
-                        Self { message: content.text.unwrap(), result: "".to_string(), tool_calls: vec![] }
+                        let content = response.content[0].clone();
+                        Self { message: content.text.unwrap_or("".to_string()), result: "".to_string(), tool_calls: vec![] }
                     }
                 }
             },
             None => {
-                Self { message: content.text.unwrap(), result: "".to_string(), tool_calls: vec![] }
+                let content = response.content[0].clone();
+                Self { message: content.text.unwrap_or("".to_string()), result: "".to_string(), tool_calls: vec![] }
             }
         }
     }

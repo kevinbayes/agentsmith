@@ -219,51 +219,51 @@ mod tests {
         // }).await.unwrap();
         // info!("anthropic: {:?}", result4);
 
-        // let anthropic_config = config.clone().config.gateways.registry
-        //     .get("anthropic_gateway")
-        //     .unwrap()
-        //     .clone();
-        //
-        // let prompt6 = Prompt::new_simple_with_tools(
-        //     String::from("You are a world renowned weather reporter."),
-        //     String::from("What's the weather like in Boston today?"),
-        //     Some(ToolChoice::Any { disable_parallel_tool_use: Some(true), type_: "any".to_string() }),
-        //     vec![Tool {
-        //         name: "get_current_weather".to_string(),
-        //         description: "Get the current weather in a given location".to_string(),
-        //         input_schema: json!({
-        //           "type": "object",
-        //           "properties": {
-        //             "location": {
-        //               "type": "string",
-        //               "description": "The city and state, e.g. San Francisco, CA"
-        //             },
-        //             "unit": {
-        //               "type": "string",
-        //               "enum": ["celsius", "fahrenheit"]
-        //             }
-        //           },
-        //           "required": ["location"]
-        //         }),
-        //         type_: Some("function".to_string()),
-        //     }]
-        // );
-        //
-        //
-        // let result6 = factory.instance("anthropic", LLMConfiguration {
-        //     base_url: None,
-        //     model: "claude-3-5-sonnet-20240620".to_string(),
-        //     temperature: None,
-        //     credentials: LLMCredentials {
-        //         api_key: anthropic_config.api_key
-        //     },
-        //     version: Some("2023-06-01".to_string()),
-        //     top_p: None,
-        //     seed: None,
-        //     max_tokens: Some(200),
-        //     stream: Some(false),
-        // }).unwrap().execute(&prompt6).await.unwrap();
-        // info!("anthropic tools: {:?}", result6);
+        let anthropic_config = config.clone().config.gateways.registry
+            .get("anthropic_gateway")
+            .unwrap()
+            .clone();
+
+        let prompt6 = Prompt::new_simple_with_tools(
+            String::from("You are a world renowned weather reporter."),
+            String::from("What's the weather like in Boston today?"),
+            Some(ToolChoice::Any { disable_parallel_tool_use: Some(true), type_: "any".to_string() }),
+            vec![Tool {
+                name: "get_current_weather".to_string(),
+                description: "Get the current weather in a given location".to_string(),
+                input_schema: json!({
+                  "type": "object",
+                  "properties": {
+                    "location": {
+                      "type": "string",
+                      "description": "The city and state, e.g. San Francisco, CA"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "enum": ["celsius", "fahrenheit"]
+                    }
+                  },
+                  "required": ["location"]
+                }),
+                type_: Some("function".to_string()),
+            }]
+        );
+
+
+        let result6 = factory.instance("anthropic", LLMConfiguration {
+            base_url: None,
+            model: "claude-3-5-sonnet-20240620".to_string(),
+            temperature: None,
+            credentials: LLMCredentials {
+                api_key: anthropic_config.api_key
+            },
+            version: Some("2023-06-01".to_string()),
+            top_p: None,
+            seed: None,
+            max_tokens: Some(200),
+            stream: Some(false),
+        }).unwrap().execute(&prompt6).await.unwrap();
+        info!("anthropic tools: {:?}", result6);
 
         // let result = factory.instance("cerebras").unwrap().execute(&Prompt {
         //     user: String::from("Tell me what your job is?"),

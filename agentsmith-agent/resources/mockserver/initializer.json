@@ -116,21 +116,28 @@
       "path": "/anthropic_tool/v1/messages"
     },
     "httpResponse": {
-      "statusCode": 200,
       "body": {
-        "id": "msg_01RRSnhxG1w1DVsvQA2qm2Mm",
+        "id": "msg_01B24gv88XcdWCvmG2MNqhTg",
         "type": "message",
         "role": "assistant",
         "model": "claude-3-5-sonnet-20240620",
         "content": [
           {
             "type": "text",
-            "text": "Certainly! I can help you with that information. To get the current weather in San Francisco, I'll use the get_weather function. Let me fetch that data for you."
+            "text": "To answer your question about the weather and cloud cover in San Francisco, I'll need to use two different tools to get the most accurate and comprehensive information. Let me fetch that data for you."
           },
           {
             "type": "tool_use",
-            "id": "toolu_012UQk4kPcYF7XYj67iZzbwi",
+            "id": "toolu_01YNvyCZyk3qSzq82ZEUWB6f",
             "name": "get_weather",
+            "input": {
+              "location": "San Francisco, CA"
+            }
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_0141CBC2cnffCRr8NfZ1ZWfV",
+            "name": "get_cloud_cover",
             "input": {
               "location": "San Francisco, CA"
             }
@@ -139,8 +146,8 @@
         "stop_reason": "tool_use",
         "stop_sequence": null,
         "usage": {
-          "input_tokens": 384,
-          "output_tokens": 94
+          "input_tokens": 463,
+          "output_tokens": 137
         }
       }
     }
@@ -151,7 +158,6 @@
       "path": "/openai_tools/v1/chat/completions"
     },
     "httpResponse": {
-      "statusCode": 200,
       "body": {
         "id": "chatcmpl-AKGWn4r51SwhpHf85Gp9e9IOufN0l",
         "object": "chat.completion",

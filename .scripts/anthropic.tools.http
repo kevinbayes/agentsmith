@@ -20,12 +20,26 @@ Content-Type: application/json
         },
         "required": ["location"]
       }
+    },
+    {
+      "name": "get_cloud_cover",
+      "description": "Get the current cloud cover for a location.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA"
+          }
+        },
+        "required": ["location"]
+      }
     }
   ],
   "messages": [
     {
       "role": "user",
-      "content": "What is the weather like in San Francisco?"
+      "content": "What is the weather and cloud cover like in San Francisco?"
     }
   ]
 }

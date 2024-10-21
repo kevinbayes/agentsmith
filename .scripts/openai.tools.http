@@ -90,9 +90,28 @@ Content-Type: application/json
 
 
 
+POST https://api.openai.com/v1/chat/completions
+Authorization: Bearer {{ openai_token }}
+Content-Type: application/json
+
+{
+  "model": "gpt-4o-mini",
+  "max_tokens" : 500,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Can you generte a cat image?"
+    }
+  ]
+}
+
 ###
 
-POST http://localhost:1080/anthropic/v1/messages
+
+
+###
+
+POST http://localhost:1080/openai_tools/v1/chat/completions
 Authorization: Bearer {{token}}
 Content-Type: application/json
 

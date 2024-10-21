@@ -1,4 +1,4 @@
-use log::info;
+use log::{debug, info};
 use crate::llm::anthropic_llm::AnthropicGenerateResponse;
 use crate::llm::openai_llm::OpenAIGenerateResponse;
 use crate::llm::prompt::Prompt;
@@ -43,7 +43,53 @@ pub struct LLMResult {
 pub struct LLMResultToolCall {
     pub id: String,
     pub type_: String,
-    pub function: Option<Value>
+    pub name: String,
+    pub input: Option<Value>
+}
+
+impl LLMResultToolCall {
+
+    fn from_openai(tool_calls: Option<Vec<Value>>) -> Option<Vec<LLMResultToolCall>> {
+        match tool_calls {
+            Some(tool_calls) => {
+                Some(tool_calls.iter().map(|item| {
+                    let item = item.clone();
+
+                    let id = match item.get("id") {
+                        Some(Value::String(id)) => id.clone(),
+                        _ => "".to_string(),
+                    };
+
+                    let type_ = match item.get("type") {
+                        Some(Value::String(type_)) => type_.clone(),
+                        _ => "function".to_string(),
+                    };
+
+                    let function_value = match item.get("function") {
+                        Some(function) => function.clone(),
+                        _ => Value::Null
+                    };
+
+                    let name_and_argument = match function_value {
+                        Value::Object(o) => {
+                            (o.get("name").map(|x| x.clone()), o.get("arguments").map(|x| x.clone()))
+                        }
+                        _ => (None, None)
+                    };
+
+                    (id, type_, name_and_argument.0, name_and_argument.1)
+                }).filter(|o| o.2.is_some() && o.3.is_some())
+                    .map(|o| Self {
+                        id: o.0,
+                        type_: o.1,
+                        name: String::from(o.2.unwrap().as_str().unwrap()),
+                        input: serde_json::from_str(o.3.unwrap().as_str().unwrap()).unwrap(),
+                    })
+                    .collect())
+            }
+            None => None,
+        }
+    }
 }
 
 impl LLMResult {
@@ -63,7 +109,12 @@ impl LLMResult {
 
         match choice {
             Some(choice) => {
-                Self { message: choice.message.content.unwrap(), result: "".to_string(), tool_calls: vec![] }
+                info!("Creating response from {:?}", choice.clone());
+                let tool_calls = LLMResultToolCall::from_openai(choice.message.clone().tool_calls)
+                    .unwrap_or(Vec::new());
+
+                debug!("Creating response tools {:?}", tool_calls.clone());
+                Self { message: choice.message.content.unwrap_or("".to_string()), result: "".to_string(), tool_calls }
             },
             None => {
                 Self { message: "No response received.".to_string(), result: "error".to_string(), tool_calls: vec![] }
@@ -84,7 +135,11 @@ impl LLMResult {
         match choice {
             Some(choice) => {
                 info!("Creating response from {:?}", choice.clone());
-                Self { message: choice.message.content.unwrap(), result: "".to_string(), tool_calls: vec![] }
+                let tool_calls = LLMResultToolCall::from_openai(choice.message.clone().tool_calls)
+                    .unwrap_or(Vec::new());
+
+                debug!("Creating response tools {:?}", tool_calls.clone());
+                Self { message: choice.message.content.unwrap_or("".to_string()), result: "".to_string(), tool_calls }
             },
             None => {
                 Self { message: "No response received.".to_string(), result: "error".to_string(), tool_calls: vec![] }
@@ -103,7 +158,12 @@ impl LLMResult {
 
         match choice {
             Some(choice) => {
-                Self { message: choice.message.content.unwrap(), result: "".to_string(), tool_calls: vec![] }
+                info!("Creating response from {:?}", choice.clone());
+                let tool_calls = LLMResultToolCall::from_openai(choice.message.clone().tool_calls)
+                    .unwrap_or(Vec::new());
+
+                debug!("Creating response tools {:?}", tool_calls.clone());
+                Self { message: choice.message.content.unwrap_or("".to_string()), result: "".to_string(), tool_calls }
             },
             None => {
                 Self { message: "No response received.".to_string(), result: "error".to_string(), tool_calls: vec![] }

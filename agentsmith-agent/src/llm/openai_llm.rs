@@ -396,7 +396,7 @@ pub struct OpenAIGenerateResponseChoice {
 pub struct OpenAIGenerateResponseMessage {
     pub content: Option<String>,
     pub role: String,
-    pub tool_calls: Option<Value>,
+    pub tool_calls: Option<Vec<Value>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

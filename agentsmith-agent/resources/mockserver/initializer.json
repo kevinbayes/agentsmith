@@ -148,7 +148,7 @@
   {
     "httpRequest": {
       "method": "POST",
-      "path": "/openai_tools/v1/messages"
+      "path": "/openai_tools/v1/chat/completions"
     },
     "httpResponse": {
       "statusCode": 200,

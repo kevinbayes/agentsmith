@@ -1,6 +1,6 @@
 use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
 use agentsmith_common::config::config::{Config, GatewayConfig};
-use agentsmith_common::error::error::{Error, Result};
+use agentsmith_common::error::error::{SystemError, SystemResult};
 use chrono::Local;
 use futures_util::TryFutureExt;
 use reqwest::{Proxy, Url};
@@ -435,7 +435,7 @@ impl OpenAILLM {
 
 impl GenerateText for OpenAILLM {
 
-    async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
+    async fn generate(&self, prompt: &Prompt) -> SystemResult<LLMResult> {
 
         let global_config = self.global_config.clone();
         let config = self.config.clone();
@@ -455,7 +455,7 @@ impl GenerateText for OpenAILLM {
             .build()
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 2 }
             })?;
         info!("Request: {:?}", request);
         info!("Request Body: {:?}", request_obj);
@@ -463,13 +463,13 @@ impl GenerateText for OpenAILLM {
         let res = client.execute(request)
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 2 }
             })
             .await?
             .json::<OpenAIGenerateResponse>()
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 2 }
             })
             .await?;
 

@@ -6,7 +6,7 @@ use crate::agent::software_reviewer_agent::SoftwareReviewerAgent;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum Agent {
     TextAgent(TextAgent),
     SoftwareArchitectAgent(SoftwareArchitectAgent),

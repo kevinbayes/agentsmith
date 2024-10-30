@@ -1,0 +1,203 @@
+[
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    },
+    "httpResponse": {
+      "body": {}
+    }
+  },
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/cerebras/v1/chat/completions"
+    },
+    "httpResponse": {
+      "body": {
+        "id": "chatcmpl-292e278f-514e-4186-9010-91ce6a14168b",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I assist you today?",
+              "role": "assistant"
+            }
+          }
+        ],
+        "created": 1723733419,
+        "model": "llama3.1-8b",
+        "system_fingerprint": "fp_70185065a4",
+        "object": "chat.completion",
+        "usage": {
+          "prompt_tokens": 12,
+          "completion_tokens": 10,
+          "total_tokens": 22
+        },
+        "time_info": {
+          "queue_time": 0.000073161,
+          "prompt_time": 0.0010744798888888889,
+          "completion_time": 0.005658071111111111,
+          "total_time": 0.022224903106689453,
+          "created": 1723733419
+        }
+      }
+    }
+  },
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/groq/openai/v1/chat/completions"
+    },
+    "httpResponse": {
+      "body": {
+        "id": "chatcmpl-21c314b2-cf2e-462b-872d-177d953c5166",
+        "object": "chat.completion",
+        "created": 1729084135,
+        "model": "llama3-8b-8192",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Fast language models have gained significant attention in recent years due to their potential to revolutionize various aspects of natural language processing (NLP) and artificial intelligence (AI). Here are some reasons why fast language models are important:\n\n1. **Improved Response Times**: Fast language models enable developers to build applications that respond quickly to user input, providing a better user experience. This is especially crucial in applications where speed and responsiveness are essential, such as chatbots, virtual assistants, or language translation tools.\n2. **Scalability**: Fast language models can process large volumes of text data efficiently, making them suitable for big data applications. This scalability allows companies to analyze vast amounts of text data, extract insights, and make data-driven decisions.\n3. **Increased Accuracy**: By processing text faster, fast language models can perform multiple tasks simultaneously, such as language translation, sentiment analysis, and grammar correction, while maintaining a high level of accuracy.\n4. **Applications in Real-time Chat**: Fast language models can be used to build real-time chat applications, such as instant messaging services, social media, or customer support platforms. This enables users to communicate with each other in real-time, receiving instant responses to their messages.\n5. **Text Classification and Sentiment Analysis**: Fast language models can be used for text classification and sentiment analysis, enabling companies to quickly identify customer opinions, classify text into categories, and make data-driven decisions.\n6. **Language Translation**: Fast language models can be trained to translate text quickly, enabling real-time language translation and increasing global communication.\n7. **Enhanced User Engagement**: Fast language models can be used to develop chatbots and virtual assistants that can engage with users more effectively, providing personalized responses and improving overall user experience.\n8. **Faster Content Generation**: Fast language models can be used to generate content quickly, such as articles, blog posts, or social media updates, reducing the time and effort required for content creation.\n9. **Supporting Multitasking**: Fast language models can support multitasking capabilities, enabling users to perform multiple tasks simultaneously, such as writing an email and chatting with a colleague.\n10. **Advancements in AI Research**: The development of fast language models is driving advancements in AI research, particularly in areas like reinforcement learning, generative models, and attention mechanisms.\n\nIn summary, fast language models are important because they enable faster processing, scalability, and increased accuracy in NLP applications. They have the potential to transform various industries, including customer service, marketing, education, and healthcare, by providing real-time voice assistants, language translation, and content generation capabilities."
+            },
+            "logprobs": null,
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "queue_time": 0.011490535999999999,
+          "prompt_tokens": 18,
+          "prompt_time": 0.002809802,
+          "completion_tokens": 523,
+          "completion_time": 0.435833333,
+          "total_tokens": 541,
+          "total_time": 0.438643135
+        },
+        "system_fingerprint": "fp_179b0f92c9",
+        "x_groq": {
+          "id": "req_01jaaq45zjeq682jssev92ecvr"
+        }
+      }
+    }
+  },
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/anthropic/v1/messages"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "body": {
+        "content": [
+          {
+            "text": "Hi! My name is Claude.",
+            "type": "text"
+          }
+        ],
+        "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+        "model": "claude-3-5-sonnet-20240620",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "type": "message",
+        "usage": {
+          "input_tokens": 2095,
+          "output_tokens": 503
+        }
+      }
+    }
+  },
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/anthropic_tool/v1/messages"
+    },
+    "httpResponse": {
+      "body": {
+        "id": "msg_01B24gv88XcdWCvmG2MNqhTg",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20240620",
+        "content": [
+          {
+            "type": "text",
+            "text": "To answer your question about the weather and cloud cover in San Francisco, I'll need to use two different tools to get the most accurate and comprehensive information. Let me fetch that data for you."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_01YNvyCZyk3qSzq82ZEUWB6f",
+            "name": "get_weather",
+            "input": {
+              "location": "San Francisco, CA"
+            }
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_0141CBC2cnffCRr8NfZ1ZWfV",
+            "name": "get_cloud_cover",
+            "input": {
+              "location": "San Francisco, CA"
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 463,
+          "output_tokens": 137
+        }
+      }
+    }
+  },
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/openai_tools/v1/chat/completions"
+    },
+    "httpResponse": {
+      "body": {
+        "id": "chatcmpl-AKGWn4r51SwhpHf85Gp9e9IOufN0l",
+        "object": "chat.completion",
+        "created": 1729393457,
+        "model": "gpt-4o-mini-2024-07-18",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call_gt8hC3LuTwpmoF9layHN9ztg",
+                  "type": "function",
+                  "function": {
+                    "name": "get_current_weather",
+                    "arguments": "{\"location\":\"Boston, MA\"}"
+                  }
+                }
+              ],
+              "refusal": null
+            },
+            "logprobs": null,
+            "finish_reason": "length"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 80,
+          "completion_tokens": 10,
+          "total_tokens": 90,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "completion_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "system_fingerprint": "fp_482c22a7bc"
+      }
+    }
+  }
+]

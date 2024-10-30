@@ -1,4 +1,8 @@
+pub mod database;
 pub mod error;
+pub mod event;
+pub mod model;
+pub mod security;
 pub mod redis;
 pub mod config;
 

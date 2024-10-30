@@ -25,6 +25,7 @@ pub struct Config {
 pub struct ServerConfig {
     // Define your configuration structure
     pub redis: RedisConfig,
+    pub qdrant: QdrantConfig,
     pub database: DatabaseConfig,
     pub host: HostConfig,
     pub security: SecurityConfig,
@@ -92,6 +93,13 @@ pub struct RedisConfig {
     // Define your configuration structure
     pub host: String,
     pub connection_pool_size: u32,
+}
+
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct QdrantConfig {
+    // Define your configuration structure
+    pub host: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

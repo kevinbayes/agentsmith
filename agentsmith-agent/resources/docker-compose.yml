@@ -1,6 +1,17 @@
 version: '3.6'
 services:
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - type: bind
+        source: ./qdrant/
+        target: /qdrant/storage
+
+
   mockserver:
     image: mockserver/mockserver:latest
     ports:

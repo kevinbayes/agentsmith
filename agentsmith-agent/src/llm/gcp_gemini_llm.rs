@@ -7,7 +7,7 @@ use serde_json::Value;
 use agentsmith_common::config::config::{Config, GatewayConfig};
 use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
 
-use agentsmith_common::error::error::{Error, Result};
+use agentsmith_common::error::error::{SystemError, SystemResult};
 use crate::llm::openai_llm::{OpenAIRequest, OpenAIRequestMessage, UserContent};
 use crate::llm::prompt::Prompt;
 
@@ -97,7 +97,7 @@ impl GeminiLLM {
 
 impl GenerateText for GeminiLLM {
 
-    async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
+    async fn generate(&self, prompt: &Prompt) -> SystemResult<LLMResult> {
 
         let global_config = self.global_config.clone();
         let config = self.config.clone();
@@ -122,7 +122,7 @@ impl GenerateText for GeminiLLM {
         };
 
         if prompt.len() == 0 {
-            Err(Error::LLMError { id: 0, code: 0 })
+            Err(SystemError::LLMError { id: 0, code: 0 })
         } else {
 
             let request = GeminiGenerateRequest {
@@ -140,13 +140,13 @@ impl GenerateText for GeminiLLM {
                 .send()
                 .map_err(|e| {
                     println!("Error: {:?}", e);
-                    Error::AgentError { id: 0, code: 1 }
+                    SystemError::AgentError { id: 0, code: 1 }
                 })
                 .await?
                 .json::<GeminiGenerateResponse>()
                 .map_err(|e| {
                     println!("Error: {:?}", e);
-                    Error::AgentError { id: 0, code: 2 }
+                    SystemError::AgentError { id: 0, code: 2 }
                 })
                 .await?;
 

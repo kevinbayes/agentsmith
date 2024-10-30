@@ -197,6 +197,30 @@ impl LLMResult {
         }
     }
 
+    pub fn from_grok(_response: &OpenAIGenerateResponse) -> Self {
+
+        let response = _response.clone();
+        let choice = if response.choices.len() > 0 {
+            Some(response.choices[0].clone())
+        } else {
+            None
+        };
+
+        match choice {
+            Some(choice) => {
+                info!("Creating response from {:?}", choice.clone());
+                let tool_calls = LLMResultToolCall::from_openai(choice.message.clone().tool_calls)
+                    .unwrap_or(Vec::new());
+
+                debug!("Creating response tools {:?}", tool_calls.clone());
+                Self { message: choice.message.content.unwrap_or("".to_string()), result: "".to_string(), tool_calls }
+            },
+            None => {
+                Self { message: "No response received.".to_string(), result: "error".to_string(), tool_calls: vec![] }
+            }
+        }
+    }
+
     pub fn from_anthropic(anthropic_generate_response: &AnthropicGenerateResponse) -> Self {
 
         let response = anthropic_generate_response.clone();
@@ -247,5 +271,5 @@ impl LLMResult {
 
 pub trait GenerateText {
 
-    async fn generate(&self, prompt: &Prompt) -> agentsmith_common::error::error::Result<LLMResult>;
+    async fn generate(&self, prompt: &Prompt) -> agentsmith_common::error::error::SystemResult<LLMResult>;
 }

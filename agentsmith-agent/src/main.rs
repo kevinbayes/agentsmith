@@ -1,4 +1,5 @@
 mod agent;
+mod memory;
 mod llm;
 
 fn main() {

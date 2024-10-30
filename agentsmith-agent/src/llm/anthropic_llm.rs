@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use agentsmith_common::config::config::{Config, GatewayConfig};
 use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
-use agentsmith_common::error::error::{Error, Result};
+use agentsmith_common::error::error::{SystemError, SystemResult};
 use chrono::Local;
 use tracing::info;
 use tracing_subscriber;
@@ -235,9 +235,9 @@ pub struct AnthropicConfig {
 
 impl AnthropicRequest {
 
-    fn from_prompt(config: &LLMConfiguration, prompt: &Prompt) -> Self {
+    fn from_prompt<'a>(config: &'a LLMConfiguration, prompt: &'a Prompt) -> Self {
 
-        let config = config.clone();
+        // let config = config.clone();
 
         match prompt {
             Prompt::Simple { system, user, tools, tool_choice } => {
@@ -252,9 +252,9 @@ impl AnthropicRequest {
                 let tool_choice = Self::resolve_tool_choice(tool_choice, is_empty_tools);
 
                 AnthropicRequest {
-                    model: config.model,
+                    model: config.model.clone(),
                     stream: Some(false),
-                    system: system,
+                    system,
                     metadata: None,
                     messages: vec![AnthropicMessage {
                         role: Role::User,
@@ -263,11 +263,11 @@ impl AnthropicRequest {
                             text: user
                         }],
                     }],
-                    temperature: config.temperature,
-                    max_tokens: config.max_tokens,
+                    temperature: config.temperature.clone(),
+                    max_tokens: config.max_tokens.clone(),
                     top_p: None,
                     stop_sequences: None,
-                    tool_choice: tool_choice,
+                    tool_choice,
                     tools: converted_tools,
                 }
             }
@@ -285,16 +285,16 @@ impl AnthropicRequest {
                 let tool_choice = Self::resolve_tool_choice(tool_choice, is_empty_tools);
 
                 AnthropicRequest {
-                    model: config.model,
+                    model: config.model.clone(),
                     stream: Some(false),
-                    system: system,
+                    system,
                     metadata: None,
                     messages: request_messages,
-                    temperature: Some(1.0),
-                    max_tokens: Some(500),
+                    temperature: config.temperature.clone(),
+                    max_tokens: config.max_tokens.clone(),
                     top_p: Some(1.0),
                     stop_sequences: None,
-                    tool_choice: tool_choice,
+                    tool_choice,
                     tools: converted_tools,
                 }
             }
@@ -392,7 +392,7 @@ impl AnthropicLLM {
 }
 
 impl GenerateText for AnthropicLLM {
-    async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
+    async fn generate(&self, prompt: &Prompt) -> SystemResult<LLMResult> {
 
         let global_config = self.global_config.clone();
         let config = self.config.clone();
@@ -414,7 +414,7 @@ impl GenerateText for AnthropicLLM {
             .build()
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 2 }
             })?;
         info!("Request: {:?}", request);
         info!("Request Body: {:?}", request_obj);
@@ -422,13 +422,13 @@ impl GenerateText for AnthropicLLM {
         let res = client.execute(request)
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 2 }
             })
             .await?
             .json::<AnthropicGenerateResponse>()
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 2 }
             })
             .await?;
         //

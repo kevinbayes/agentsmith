@@ -10,7 +10,8 @@ members = [
     "agentsmith-common",
     "agentsmith-prompt",
     "agentsmith-toolbox",
-    "agentsmith-orchestrator"
+    "agentsmith-orchestrator",
+    "agentsmith-web"
 ]
 
 [dependencies]

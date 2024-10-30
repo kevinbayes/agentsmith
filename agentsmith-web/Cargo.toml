@@ -1,0 +1,52 @@
+[package]
+name = "agentsmith-web"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+agentsmith-common = { path = "../agentsmith-common"}
+
+axum = { version = "0.8.0-alpha.1", features = ["ws", "tracing", "macros"] }
+axum-extra = { version = "0.10.0-alpha.1", features = ["typed-header"] }
+base64 = "0.22.1"
+cloudevents-sdk = "0.7.0"
+chrono = "0.4"
+csv = "1.3"
+socketioxide = {  version = "0" }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.24"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+log = "0.4"
+uuid = { version = "1", features = ["v4"] }
+jsonwebtoken = "9"
+tonic = "0.12"
+prost = "0.13"
+serde = "1.0"
+serde_json = "1.0"
+strum_macros = "0.26.2"
+async-trait = "0.1.80"
+reqwest = { version = "0.12", features = ["json"] }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+sqlx = { version = "0.8", features = ["runtime-async-std-native-tls", "mysql", "chrono", "uuid"] }
+arangors = "0.6"
+qdrant-client = "1"
+fastembed="4.1.0"
+futures = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+headers = "0.4"
+
+r2d2 = "0.8"
+r2d2_redis = "0.14"
+
+[build-dependencies]
+tonic-build = "0.11"
+prost-build = "0.12"
+
+[dev-dependencies]
+anyhow = "1"
+httpc-test = "0.1"

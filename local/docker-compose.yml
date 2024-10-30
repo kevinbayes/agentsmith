@@ -1,0 +1,54 @@
+version: '3.6'
+services:
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - type: bind
+        source: ./qdrant/
+        target: /qdrant/storage
+
+
+  mockserver:
+    image: mockserver/mockserver:latest
+    ports:
+      - "1080:1080"
+    environment:
+      MOCKSERVER_MAX_EXPECTATIONS: 100
+      MOCKSERVER_MAX_HEADER_SIZE: 8192
+      MOCKSERVER_INITIALIZATION_JSON_PATH: /config/initializer.json
+    volumes:
+      - type: bind
+        source: ./mockserver/
+        target: /config
+
+
+  database:
+    image: mysql:8
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=password
+    volumes:
+      - type: bind
+        read_only: false
+        source: ./mysql_data
+        target: /var/lib/mysql
+      - type: bind
+        read_only: false
+        source: ../database
+        target: /docker-entrypoint-initdb.d
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          memory: 2048M
+        reservations:
+          memory: 8M

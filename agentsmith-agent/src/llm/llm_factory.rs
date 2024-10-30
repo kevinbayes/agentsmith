@@ -3,12 +3,13 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use agentsmith_common::config::config::Config;
 use log::info;
-use agentsmith_common::error::error::Error::AgentFactoryError;
+use agentsmith_common::error::error::SystemError::AgentFactoryError;
 use crate::llm::anthropic_llm::AnthropicLLM;
 use crate::llm::gcp_gemini_llm::GeminiLLM;
 use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
 
 use crate::llm::cerebras_llm::CerebrasLLM;
+use crate::llm::grok_llm::GrokLLM;
 use crate::llm::groq_llm::GroqLLM;
 use crate::llm::huggingface_tgi_llm::HuggingFaceLLM;
 use crate::llm::openai_llm::OpenAILLM;
@@ -20,22 +21,24 @@ pub enum LLM {
     CerebrasLLM(CerebrasLLM),
     GeminiLLM(GeminiLLM),
     GroqLLM(GroqLLM),
+    GrokLLM(GrokLLM),
     OpenAILLM(OpenAILLM),
     HuggingFaceLLM(HuggingFaceLLM),
 }
 
 trait LLMClient {
-    async fn execute(&self, prompt: &Prompt) -> agentsmith_common::error::error::Result<LLMResult>;
+    async fn execute(&self, prompt: &Prompt) -> agentsmith_common::error::error::SystemResult<LLMResult>;
 }
 
 impl LLMClient for LLM {
-    async fn execute(&self, prompt: &Prompt) -> agentsmith_common::error::error::Result<LLMResult> {
+    async fn execute(&self, prompt: &Prompt) -> agentsmith_common::error::error::SystemResult<LLMResult> {
         info!("Test");
         match self {
             LLM::AnthropicLLM(llm) => llm.generate(prompt).await,
             LLM::CerebrasLLM(llm) => llm.generate(prompt).await,
             LLM::GeminiLLM(llm) => llm.generate(prompt).await,
             LLM::GroqLLM(llm) => llm.generate(prompt).await,
+            LLM::GrokLLM(llm) => llm.generate(prompt).await,
             LLM::OpenAILLM(llm) => llm.generate(prompt).await,
             LLM::HuggingFaceLLM(llm) => llm.generate(prompt).await,
         }
@@ -82,7 +85,7 @@ impl LLMFactory {
         }
     }
 
-    pub fn instance(&self, key: &str, config: LLMConfiguration) -> agentsmith_common::error::error::Result<LLM> {
+    pub fn instance(&self, key: &str, config: LLMConfiguration) -> agentsmith_common::error::error::SystemResult<LLM> {
 
         let mut registry = self.registry.lock().unwrap();
 
@@ -114,6 +117,12 @@ impl LLMFactory {
                     "groq" => {
                         //"llama-3.1-8b-instant"
                         let llm = &LLM::GroqLLM(GroqLLM::new(self.config.clone(), config));
+                        registry.register(key.to_string(), llm.clone());
+                        Ok(llm.clone())
+                    }
+                    "grok" => {
+                        //"llama-3.1-8b-instant"
+                        let llm = &LLM::GrokLLM(GrokLLM::new(self.config.clone(), config));
                         registry.register(key.to_string(), llm.clone());
                         Ok(llm.clone())
                     }

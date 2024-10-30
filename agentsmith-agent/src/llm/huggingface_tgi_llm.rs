@@ -1,7 +1,7 @@
 use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
 use crate::llm::prompt::Prompt;
 use agentsmith_common::config::config::Config;
-use agentsmith_common::error::error::Result;
+use agentsmith_common::error::error::SystemResult;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,7 +35,7 @@ impl HuggingFaceLLM {
 
 impl GenerateText for HuggingFaceLLM {
 
-    async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
+    async fn generate(&self, prompt: &Prompt) -> SystemResult<LLMResult> {
 
         Ok(LLMResult::new(String::from("Static!")))
     }

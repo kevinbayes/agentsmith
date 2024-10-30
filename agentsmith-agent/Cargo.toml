@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 pyo3 = { version = "0.22.3", features = ["extension-module"] }
+qdrant-client = "1"
 agentsmith-common = { path = "../agentsmith-common"}
 base64 = "0.22.1"
 cloudevents-sdk = "0.7.0"

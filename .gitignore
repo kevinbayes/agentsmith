@@ -11,3 +11,7 @@ target/
 
 .agents/
 ./tmp/
+/config.json
+/local/mysql_data/
+/local/qdrant/
+/tmp/

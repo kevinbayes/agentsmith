@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use agentsmith_common::config::config::{Config, GatewayConfig};
 use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
-use agentsmith_common::error::error::{Error, Result};
+use agentsmith_common::error::error::{SystemError, SystemResult};
 use chrono::Local;
 use tracing::info;
 use tracing_subscriber;
@@ -42,7 +42,7 @@ impl CerebrasLLM {
 
 impl GenerateText for CerebrasLLM {
 
-    async fn generate(&self, prompt: &Prompt) -> Result<LLMResult> {
+    async fn generate(&self, prompt: &Prompt) -> SystemResult<LLMResult> {
 
         let global_config = self.global_config.clone();
         let config = self.config.clone();
@@ -62,7 +62,7 @@ impl GenerateText for CerebrasLLM {
             .build()
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 2 }
             })?;
         info!("Request: {:?}", request);
         info!("Request Body: {:?}", request_obj);
@@ -70,13 +70,13 @@ impl GenerateText for CerebrasLLM {
         let res = client.execute(request)
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 2 }
             })
             .await?
             .json::<OpenAIGenerateResponse>()
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                Error::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 2 }
             })
             .await?;
 

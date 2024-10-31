@@ -5,14 +5,30 @@ use crate::agent::software_qa_agent::SoftwareQAAgent;
 use crate::agent::software_reviewer_agent::SoftwareReviewerAgent;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
+use crate::agent::human_agent::HumanAgent;
+use crate::llm::llm_factory::LLM;
 
 #[derive(Clone)]
 pub enum Agent {
     TextAgent(TextAgent),
-    SoftwareArchitectAgent(SoftwareArchitectAgent),
-    SoftwareEngineerAgent(SoftwareEngineerAgent),
-    SoftwareQAAgent(SoftwareQAAgent),
-    SoftwareReviewerAgent(SoftwareReviewerAgent),
+    HumanAgent(HumanAgent),
+    // SoftwareArchitectAgent(SoftwareArchitectAgent),
+    // SoftwareEngineerAgent(SoftwareEngineerAgent),
+    // SoftwareQAAgent(SoftwareQAAgent),
+    // SoftwareReviewerAgent(SoftwareReviewerAgent),
+}
+
+impl Agent {
+    pub fn id(&self) -> String {
+        match self {
+            Agent::TextAgent(agent) => agent.id.clone(),
+            Agent::HumanAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareArchitectAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareEngineerAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareQAAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareReviewerAgent(agent) => agent.id.clone(),
+        }
+    }
 }
 
 

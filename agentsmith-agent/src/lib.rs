@@ -1,6 +1,6 @@
-mod agent;
-mod memory;
-mod llm;
+pub mod agent;
+pub mod memory;
+pub mod llm;
 
 #[cfg(test)]
 mod tests {

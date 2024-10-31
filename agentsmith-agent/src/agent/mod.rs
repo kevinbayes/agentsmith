@@ -1,10 +1,11 @@
 pub mod agent;
 pub mod agent_factory;
 pub mod simple_agent;
+pub mod human_agent;
 pub mod software_architect_agent;
 pub mod software_engineer_agent;
 pub mod software_qa_agent;
 pub mod software_reviewer_agent;
 pub mod software_project;
 pub mod software_writer_agent;
-mod agent_tool;
+pub mod agent_tool;

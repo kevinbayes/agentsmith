@@ -1,8 +1,11 @@
 use agentsmith_common::error::error::SystemError;
 use crate::llm::prompt::PromptMessage;
 use crate::memory::general::General;
+use crate::memory::messages::Messages;
 
+#[derive(Clone)]
 pub enum Memory {
+    MESSAGES(Messages),
     GENERAL(General),
 }
 

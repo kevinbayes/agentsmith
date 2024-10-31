@@ -10,64 +10,21 @@ use crate::llm::prompt::PromptMessage;
 use crate::memory::memory::{InitialiseMemory, RecordMemory, RetrieveMemory};
 
 #[derive(Clone)]
-pub struct General {
+pub struct Messages {
     pub message_log: Arc<RwLock<Vec<PromptMessage>>>,
-    pub memory: Arc<Qdrant>,
 }
 
-impl General {
-    pub fn new(config: &Config) -> Self {
-        let client = Qdrant::from_url(config.config.qdrant.host.clone().as_str()).build().unwrap();
+impl Messages {
+    pub fn new() -> Self {
         Self {
             message_log: Arc::new(RwLock::new(vec![])),
-            memory: Arc::new(client),
         }
     }
 }
 
-impl InitialiseMemory for General {
-
-    async fn initialise_collection(&self, collection: &str) -> Result<(), SystemError> {
-
-        let creation_result =  self.memory.create_collection(
-            CreateCollectionBuilder::new(collection.clone())
-                .vectors_config(VectorParamsBuilder::new(1024, Distance::Cosine))
-                .quantization_config(ScalarQuantizationBuilder::default()),
-        ).await;
-
-        match creation_result {
-            Ok(_) => println!("Collection {} created", collection.clone()),
-            Err(e) => println!("Error creating collection {}: {}", collection.clone(), e)
-        }
-
-        Ok(())
-    }
-}
-
-impl RecordMemory for General {
+impl RecordMemory for Messages {
 
     async fn record_memory_chunk(&self, collection: &str, chunk: &str) -> Result<bool, SystemError> {
-
-        // let sample = embeddings.clone();
-        //
-        // let mut payload: Payload = Payload::new();
-        //
-        // for item in index_payload.iter() {
-        //     payload.insert(item.0.clone(), Value::from(item.1.clone()));
-        // }
-        //
-        // let points = vec![PointStruct::new(id, sample, payload)];
-        //
-        // let collection_name = collection.clone();
-        //
-        // let response = self.memory.upsert_points(collection_name, None, points, None)
-        //     .await
-        //     .map_err(|e| {
-        //         println!("Error indexing: {}", e);
-        //         Error::MemoryError
-        //     })
-        //     ?;
-
         Ok(true)
     }
 
@@ -83,14 +40,14 @@ impl RecordMemory for General {
     }
 }
 
-impl RetrieveMemory for General {
+impl RetrieveMemory for Messages {
 
     async fn retrieve_past_messages(&self) -> Vec<PromptMessage> {
         self.message_log.read().unwrap().iter().cloned().collect()
     }
 
     async fn retrieve_memory_chunks(&self, collection: &str, query: &str) -> Vec<String> {
-        todo!()
+        vec![]
     }
 }
 
@@ -117,12 +74,7 @@ mod tests {
 
         let client = Qdrant::from_url("http://localhost:6333").build().unwrap();
 
-        let memory = General {
-            message_log: Arc::new(RwLock::new(vec![])),
-            memory: Arc::new(client),
-        };
-
-        memory.initialise_collection(&String::from("test")).await.unwrap();
+        let memory = Messages::new();
 
         let current_storage = memory.retrieve_past_messages().await;
 

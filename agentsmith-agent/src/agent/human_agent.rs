@@ -4,12 +4,9 @@ use crate::llm::llm_factory::LLM;
 use crate::memory::memory::Memory;
 
 #[derive(Clone)]
-pub struct TextAgent {
+pub struct HumanAgent {
     pub id: String,
     pub name: String,
     pub tenant: String,
     pub config: crate::agent::agent::AgentConfig,
-    pub llm: LLM,
-    pub memory: Arc<Memory>,
-    pub toolbox: Arc<Vec<AgentTool>>
 }

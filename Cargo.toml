@@ -9,7 +9,7 @@ members = [
     "agentsmith-eval",
     "agentsmith-common",
     "agentsmith-prompt",
-    "agentsmith-toolbox",
+    "agentsmith-runtime",
     "agentsmith-orchestrator",
     "agentsmith-web"
 ]

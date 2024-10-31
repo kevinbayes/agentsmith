@@ -1,0 +1,8 @@
+[package]
+name = "agentsmith-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agentsmith-common = { path = "../agentsmith-common"}
+agentsmith-agent = { path = "../agentsmith-agent"}

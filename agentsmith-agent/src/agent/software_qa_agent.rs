@@ -1,6 +1,6 @@
 use crate::llm::llm_factory::LLM;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SoftwareQAAgent {
     id: String,
     name: String,

@@ -5,9 +5,9 @@ edition = "2021"
 
 [workspace]
 members = [
+    "agentsmith-common",
     "agentsmith-agent",
     "agentsmith-eval",
-    "agentsmith-common",
     "agentsmith-prompt",
     "agentsmith-runtime",
     "agentsmith-orchestrator",

@@ -15,3 +15,4 @@ target/
 /local/mysql_data/
 /local/qdrant/
 /tmp/
+/agentsmith-agent/secret-llm-config.json

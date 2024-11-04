@@ -7,6 +7,7 @@ use crate::memory::memory::Memory;
 pub struct HumanAgent {
     pub id: String,
     pub name: String,
+    pub description: String,
     pub tenant: String,
     pub config: crate::agent::agent::AgentConfig,
 }

@@ -5,7 +5,7 @@ use qdrant_client::qdrant::{CreateCollection, CreateCollectionBuilder, Distance,
 use qdrant_client::qdrant::qdrant_client::QdrantClient;
 use serde::{Deserialize, Serialize};
 use agentsmith_common::config::config::Config;
-use agentsmith_common::error::error::SystemError;
+use agentsmith_common::error::error::{SystemError, SystemResult};
 use crate::llm::prompt::PromptMessage;
 use crate::memory::memory::{InitialiseMemory, RecordMemory, RetrieveMemory};
 
@@ -27,7 +27,7 @@ impl General {
 
 impl InitialiseMemory for General {
 
-    async fn initialise_collection(&self, collection: &str) -> Result<(), SystemError> {
+    async fn initialise_collection(&self, collection: &str) -> SystemResult<()> {
 
         let creation_result =  self.memory.create_collection(
             CreateCollectionBuilder::new(collection.clone())
@@ -46,7 +46,7 @@ impl InitialiseMemory for General {
 
 impl RecordMemory for General {
 
-    async fn record_memory_chunk(&self, collection: &str, chunk: &str) -> Result<bool, SystemError> {
+    async fn record_memory_chunk(&self, collection: &str, chunk: &str) -> SystemResult<bool> {
 
         // let sample = embeddings.clone();
         //
@@ -71,25 +71,25 @@ impl RecordMemory for General {
         Ok(true)
     }
 
-    async fn record_prompt_messages<'a>(&'a self, messages: &'a Vec<PromptMessage>) -> bool {
+    async fn record_prompt_messages<'a>(&'a self, messages: &'a Vec<PromptMessage>) -> SystemResult<bool> {
 
         if messages.is_empty() {
-            false
+            Ok(false)
         } else {
             let mut result = self.message_log.write().unwrap();
             result.extend(messages.iter().cloned());
-            true
+            Ok(true)
         }
     }
 }
 
 impl RetrieveMemory for General {
 
-    async fn retrieve_past_messages(&self) -> Vec<PromptMessage> {
-        self.message_log.read().unwrap().iter().cloned().collect()
+    async fn retrieve_past_messages(&self) -> SystemResult<Vec<PromptMessage>> {
+        Ok(self.message_log.read().unwrap().iter().cloned().collect())
     }
 
-    async fn retrieve_memory_chunks(&self, collection: &str, query: &str) -> Vec<String> {
+    async fn retrieve_memory_chunks(&self, collection: &str, query: &str) -> SystemResult<Vec<String>> {
         todo!()
     }
 }
@@ -126,7 +126,7 @@ mod tests {
 
         let current_storage = memory.retrieve_past_messages().await;
 
-        assert_eq!(current_storage.len(), 0);
+        assert_eq!(current_storage.unwrap().len(), 0);
 
         let result_true = memory.record_prompt_messages(&vec![PromptMessage::User {
             role: "user".to_string(),
@@ -135,15 +135,15 @@ mod tests {
                 text: "Hello world!".to_string(),
             }],
             name: None,
-        }]).await;
+        }]).await.unwrap();
 
         assert!(result_true);
 
-        let result_false = memory.record_prompt_messages(&vec![]).await;
+        let result_false = memory.record_prompt_messages(&vec![]).await.unwrap();
 
         assert!(!result_false);
 
-        let current_storage = memory.retrieve_past_messages().await;
+        let current_storage = memory.retrieve_past_messages().await.unwrap();
 
         assert_eq!(current_storage.len(), 1);
     }

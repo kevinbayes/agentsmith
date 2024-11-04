@@ -7,6 +7,8 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LLMConfiguration {
+    #[serde(rename = "provider")]
+    pub provider: String,
     #[serde(rename = "credentials")]
     pub credentials: LLMCredentials,
     #[serde(rename = "model")]

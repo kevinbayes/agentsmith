@@ -1,16 +1,22 @@
-use crate::agent::simple_agent::TextAgent;
+use crate::agent::simple_agent::SimpleAgent;
 use crate::agent::software_architect_agent::SoftwareArchitectAgent;
 use crate::agent::software_engineer_agent::SoftwareEngineerAgent;
 use crate::agent::software_qa_agent::SoftwareQAAgent;
 use crate::agent::software_reviewer_agent::SoftwareReviewerAgent;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
+use agentsmith_common::error::error::SystemResult;
+use crate::agent::agent_tool::AgentTool;
 use crate::agent::human_agent::HumanAgent;
-use crate::llm::llm_factory::LLM;
+use crate::llm::llm::{LLMConfiguration, LLMResult};
+use crate::llm::llm_factory::{LLMClient, LLM};
+use crate::llm::prompt::{Prompt, ToolChoice};
+use crate::memory::memory::MemoryConfiguration;
 
 #[derive(Clone)]
 pub enum Agent {
-    TextAgent(TextAgent),
+    SimpleAgent(SimpleAgent),
     HumanAgent(HumanAgent),
     // SoftwareArchitectAgent(SoftwareArchitectAgent),
     // SoftwareEngineerAgent(SoftwareEngineerAgent),
@@ -19,9 +25,10 @@ pub enum Agent {
 }
 
 impl Agent {
+
     pub fn id(&self) -> String {
         match self {
-            Agent::TextAgent(agent) => agent.id.clone(),
+            Agent::SimpleAgent(agent) => agent.id.clone(),
             Agent::HumanAgent(agent) => agent.id.clone(),
             // Agent::SoftwareArchitectAgent(agent) => agent.id.clone(),
             // Agent::SoftwareEngineerAgent(agent) => agent.id.clone(),
@@ -29,11 +36,91 @@ impl Agent {
             // Agent::SoftwareReviewerAgent(agent) => agent.id.clone(),
         }
     }
+
+
+
+    pub fn name(&self) -> String {
+        match self {
+            Agent::SimpleAgent(agent) => agent.name.clone(),
+            Agent::HumanAgent(agent) => agent.name.clone(),
+            // Agent::SoftwareArchitectAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareEngineerAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareQAAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareReviewerAgent(agent) => agent.id.clone(),
+        }
+    }
+
+    pub fn description(&self) -> String {
+        match self {
+            Agent::SimpleAgent(agent) => agent.description.clone(),
+            Agent::HumanAgent(agent) => agent.description.clone(),
+            // Agent::SoftwareArchitectAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareEngineerAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareQAAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareReviewerAgent(agent) => agent.id.clone(),
+        }
+    }
+
+
+
+    pub fn system_prompt(&self) -> String {
+        match self {
+            Agent::SimpleAgent(agent) => agent.config.system_prompt.clone().unwrap(),
+            Agent::HumanAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareArchitectAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareEngineerAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareQAAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareReviewerAgent(agent) => agent.id.clone(),
+        }
+    }
+
+    pub fn tool_choice(&self) -> Option<ToolChoice> {
+        match self {
+            Agent::SimpleAgent(agent) => Some(ToolChoice::Auto { type_: "auto".to_string(), disable_parallel_tool_use: Some(true) }),
+            Agent::HumanAgent(agent) => None,
+            // Agent::SoftwareArchitectAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareEngineerAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareQAAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareReviewerAgent(agent) => agent.id.clone(),
+        }
+    }
+    pub fn toolbox(&self) -> Vec<AgentTool> {
+        match self {
+            Agent::SimpleAgent(agent) => agent.toolbox.to_vec(),
+            Agent::HumanAgent(agent) => vec![],
+            // Agent::SoftwareArchitectAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareEngineerAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareQAAgent(agent) => agent.id.clone(),
+            // Agent::SoftwareReviewerAgent(agent) => agent.id.clone(),
+        }
+    }
+
+    pub async fn chat_completion(&self, prompt: &Prompt) -> SystemResult<LLMResult> {
+        match self {
+            Agent::SimpleAgent(agent) => {
+                let llm = agent.llm.clone();
+                Ok(llm.execute(prompt).await?)
+            },
+            Agent::HumanAgent(agent) => {
+                todo!()
+            },
+        }
+    }
 }
 
 
-#[derive(Debug, Clone)]
+
+
+#[derive(Clone)]
 pub struct AgentConfig {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub r#type: String,
+    pub system_prompt: Option<String>,
+    pub llm: LLMConfiguration,
+    pub memory: MemoryConfiguration,
+    pub toolbox: Vec<AgentTool>,
 }
 
 #[derive(Debug, Clone)]

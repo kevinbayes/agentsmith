@@ -1,6 +1,7 @@
+use serde_json::Value;
 
+#[derive(Clone)]
 pub struct AgentTool {
-    pub id: String,
     pub code: String,
-    pub description: String,
+    pub r#type: String,
 }

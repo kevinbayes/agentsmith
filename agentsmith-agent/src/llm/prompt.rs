@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+use std::iter::Map;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use crate::agent::agent::Agent;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Prompt {
@@ -16,6 +19,23 @@ impl Prompt {
     }
     pub fn new_message(system: String, messages: Vec<PromptMessage>, tool_choice: ToolChoice, tools: Vec<Tool>, ) -> Self {
         Self::Messages { system, messages, tools: Some(tools), tool_choice: Some(tool_choice) }
+    }
+    pub fn new_message_for_agent(agent: &Agent, messages: Vec<PromptMessage>, tool_registry: &HashMap<String, Tool>) -> Self {
+
+        let tools: Vec<Tool> = agent.toolbox()
+            .iter()
+            .filter_map(|x| tool_registry.get(&x.code).cloned())
+            .collect();
+
+        let tool_choice = agent.tool_choice().clone();
+
+        let tools = if !tools.is_empty() {
+            Some(tools)
+        } else {
+            None
+        };
+
+        Self::Messages { system: agent.system_prompt(), messages, tools, tool_choice }
     }
 }
 

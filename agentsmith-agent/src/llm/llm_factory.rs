@@ -26,7 +26,7 @@ pub enum LLM {
     HuggingFaceLLM(HuggingFaceLLM),
 }
 
-trait LLMClient {
+pub trait LLMClient {
     async fn execute(&self, prompt: &Prompt) -> agentsmith_common::error::error::SystemResult<LLMResult>;
 }
 
@@ -85,9 +85,12 @@ impl LLMFactory {
         }
     }
 
-    pub fn instance(&self, key: &str, config: LLMConfiguration) -> agentsmith_common::error::error::SystemResult<LLM> {
+    pub fn instance(&self, config: LLMConfiguration) -> agentsmith_common::error::error::SystemResult<LLM> {
 
         let mut registry = self.registry.lock().unwrap();
+
+        let binding = config.clone();
+        let key = binding.provider.as_str();
 
         match registry.get(key) {
             Some(llm) => {
@@ -207,7 +210,8 @@ mod tests {
             }]
         );
 
-        let result5 = factory.instance("openai", LLMConfiguration {
+        let result5 = factory.instance(LLMConfiguration {
+            provider: "openai".to_string(),
             base_url: None,
             model: "gpt-4o-mini".to_string(),
             temperature: None,
@@ -259,7 +263,8 @@ mod tests {
         );
 
 
-        let result6 = factory.instance("anthropic", LLMConfiguration {
+        let result6 = factory.instance(LLMConfiguration {
+            provider: "anthropic".to_string(),
             base_url: None,
             model: "claude-3-5-sonnet-20240620".to_string(),
             temperature: None,

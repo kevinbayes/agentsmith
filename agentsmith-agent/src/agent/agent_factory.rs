@@ -52,6 +52,7 @@ mod tests {
     use testcontainers::{GenericImage, ImageExt};
     use testcontainers::runners::AsyncRunner;
     use agentsmith_common::config::config::read_config;
+    use crate::agent::agent_tool::AgentTool;
     use crate::llm::llm::{LLMConfiguration, LLMCredentials};
     use crate::llm::llm_factory::LLMFactory;
     use crate::llm::prompt::Prompt;
@@ -96,7 +97,7 @@ mod tests {
             llm: llm_config,
             memory: MemoryConfiguration { r#type: "messages".to_string(), },
             system_prompt: Some("test".to_string()),
-            toolbox: vec![],
+            toolbox: vec![AgentTool { r#type: "function".to_string(), code: "get_weather".to_string() }, ],
             description: "Just a unit test".to_string(),
         };
 

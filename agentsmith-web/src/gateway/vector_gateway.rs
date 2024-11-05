@@ -5,8 +5,9 @@ use qdrant_client::prelude::point_id::PointIdOptions;
 use qdrant_client::prelude::point_id::PointIdOptions::Num;
 use qdrant_client::serde;
 use serde_json::Value as JsonValue;
-use qdrant_client::qdrant::{Value, Condition, CreateCollection, Filter, SearchPoints, VectorParams, VectorsConfig, vectors_config::Config as QConfig, SearchParams, SearchResponse, ScoredPoint};
-use serde_json::json;
+use qdrant_client::Qdrant;
+use qdrant_client::qdrant::{CreateCollectionBuilder, VectorParamsBuilder};
+use qdrant_client::qdrant::{Value, SearchPoints, SearchResponse, ScoredPoint};
 
 use crate::config::config::Config;
 use crate::common::error::{WebError, WebResult};
@@ -29,9 +30,9 @@ impl VectorGateway {
         Self { base_url }
     }
 
-    pub async fn init_collections(&self) -> WebResult<()> {
+    pub async fn init_collections(&self, collections: Vec<String>) -> WebResult<()> {
 
-        let client: QdrantClient = QdrantClient::from_url(self.base_url.clone().as_str())
+        let client: Qdrant = Qdrant::from_url(self.base_url.clone().as_str())
             .build()
             .map_err(|e| {
                 println!("Error connecting to vector gateway: {}", e);
@@ -39,19 +40,15 @@ impl VectorGateway {
             })
             ?;
 
-        for item in ["individual_conflicts".to_string(), "organisation_conflicts".to_string()].iter() {
+        for item in collections.iter() {
 
-            let creation_result =  client.create_collection(&CreateCollection {
-                collection_name: item.to_string(),
-                vectors_config: Some(VectorsConfig {
-                    config: Some(QConfig::Params(VectorParams {
-                        size: 1024,
-                        distance: Distance::Cosine.into(),
-                        ..Default::default()
-                    })),
-                }),
-                ..Default::default()
-            }).await;
+            let creation_result =
+                client
+                    .create_collection(
+                        CreateCollectionBuilder::new(item.to_string())
+                            .vectors_config(VectorParamsBuilder::new(4, Distance::Cosine.into())),
+                    )
+                    .await;
 
             match creation_result {
                 Ok(_) => println!("Collection {} created", item),

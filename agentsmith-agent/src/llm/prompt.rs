@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 use std::iter::Map;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use agentsmith_common::error::error::SystemError;
 use crate::agent::agent::Agent;
+use crate::tools::registry::{SafeToolRegistry, ToolRegistry};
+use crate::tools::tool::Tool as ActualTool;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Prompt {
@@ -20,11 +24,12 @@ impl Prompt {
     pub fn new_message(system: String, messages: Vec<PromptMessage>, tool_choice: ToolChoice, tools: Vec<Tool>, ) -> Self {
         Self::Messages { system, messages, tools: Some(tools), tool_choice: Some(tool_choice) }
     }
-    pub fn new_message_for_agent(agent: &Agent, messages: Vec<PromptMessage>, tool_registry: &HashMap<String, Tool>) -> Self {
+    pub fn new_message_for_agent(agent: &Agent, messages: Vec<PromptMessage>, tool_registry: &SafeToolRegistry) -> Self {
 
         let tools: Vec<Tool> = agent.toolbox()
             .iter()
-            .filter_map(|x| tool_registry.get(&x.code).cloned())
+            .filter_map(|x| tool_registry.read().unwrap().get_tool(&x.code))
+            .map(|x| x.as_ref().clone().into())
             .collect();
 
         let tool_choice = agent.tool_choice().clone();
@@ -142,9 +147,34 @@ pub enum ToolChoice {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Tool {
-    #[serde(rename = "type")]
-    pub type_: Option<String>,
+    pub r#type: Option<String>,
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+}
+
+
+impl Into<Tool> for ActualTool {
+
+    fn into(self) -> Tool {
+
+        match self {
+            crate::tools::tool::Tool::CallAgentTool(tool) => {
+                Tool {
+                    r#type: Some(format!("{:?}", tool.r#type)),
+                    description: tool.description.clone(),
+                    name: tool.code.clone(),
+                    input_schema: tool.input_schema.clone(),
+                }
+            },
+            crate::tools::tool::Tool::WebClientTool(tool) => {
+                Tool {
+                    r#type: Some(format!("{:?}", tool.r#type)),
+                    description: tool.description.clone(),
+                    name: tool.code.clone(),
+                    input_schema: tool.input_schema.clone(),
+                }
+            },
+        }
+    }
 }

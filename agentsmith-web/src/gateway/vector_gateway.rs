@@ -8,7 +8,6 @@ use serde_json::Value as JsonValue;
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{CreateCollectionBuilder, VectorParamsBuilder};
 use qdrant_client::qdrant::{Value, SearchPoints, SearchResponse, ScoredPoint};
-use serde_json::json;
 
 use crate::config::config::Config;
 use crate::common::error::{WebError, WebResult};
@@ -31,7 +30,7 @@ impl VectorGateway {
         Self { base_url }
     }
 
-    pub async fn init_collections(&self) -> WebResult<()> {
+    pub async fn init_collections(&self, collections: Vec<String>) -> WebResult<()> {
 
         let client: Qdrant = Qdrant::from_url(self.base_url.clone().as_str())
             .build()
@@ -41,7 +40,9 @@ impl VectorGateway {
             })
             ?;
 
-        for item in ["individual_conflicts".to_string(), "organisation_conflicts".to_string()].iter() {
+
+        for item in collections.iter() {
+
             let creation_result =
                 client
                     .create_collection(

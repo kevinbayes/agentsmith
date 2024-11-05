@@ -4,12 +4,13 @@ use agentsmith_agent::memory::memory::{Memory, RecordMemory, RetrieveMemory};
 use agentsmith_agent::memory::messages::Messages;
 use std::sync::Arc;
 use agentsmith_agent::llm::prompt::{Prompt, Tool};
+use agentsmith_agent::tools::registry::ToolRegistry;
 use agentsmith_common::error::error::SystemResult;
 
 pub struct Swarm {
     pub memory: Memory,
     pub agents: Arc<Vec<Agent>>,
-    pub tool_registry: HashMap<String, Tool>,
+    pub tool_registry: ToolRegistry,
     pub initial_agent: String,
     pub active_agent: String,
     pub max_turns: u16,
@@ -22,7 +23,7 @@ pub struct SwarmResult {
 
 impl Swarm {
 
-    pub fn new(agents: Arc<Vec<Agent>>, tool_registry: &HashMap<String, Tool>, max_turns: u16, ) -> Self {
+    pub fn new(agents: Arc<Vec<Agent>>, tool_registry: &ToolRegistry, max_turns: u16, ) -> Self {
 
         if agents.is_empty() {
             panic!("No agents configured, must have at least one!");

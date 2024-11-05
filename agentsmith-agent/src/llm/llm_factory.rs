@@ -206,7 +206,7 @@ mod tests {
                   },
                   "required": ["location"]
                 }),
-                type_: Some("function".to_string()),
+                r#type: Some("function".to_string()),
             }]
         );
 
@@ -258,7 +258,7 @@ mod tests {
                   },
                   "required": ["location"]
                 }),
-                type_: Some("function".to_string()),
+                r#type: Some("function".to_string()),
             }]
         );
 

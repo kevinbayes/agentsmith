@@ -53,10 +53,12 @@ mod tests {
     use testcontainers::runners::AsyncRunner;
     use agentsmith_common::config::config::read_config;
     use crate::agent::agent_tool::AgentTool;
+    use crate::llm::anthropic_llm::ToolChoice::Tool;
     use crate::llm::llm::{LLMConfiguration, LLMCredentials};
     use crate::llm::llm_factory::LLMFactory;
-    use crate::llm::prompt::Prompt;
+    use crate::llm::prompt::{Prompt, PromptMessage, UserContent};
     use crate::memory::memory::MemoryConfiguration;
+    use crate::tools::registry::{SafeToolRegistry, ToolRegistry};
     use super::*;
 
 
@@ -93,23 +95,32 @@ mod tests {
         let agent_config = AgentConfig {
             id: "candidate_agent".to_string(),
             name: "Unit Test".to_string(),
+            description: "".to_string(),
             r#type: "simple".to_string(),
+            system_prompt: Some("test".to_string()),
             llm: llm_config,
             memory: MemoryConfiguration { r#type: "messages".to_string(), },
-            system_prompt: Some("test".to_string()),
-            toolbox: vec![AgentTool { r#type: "function".to_string(), code: "get_weather".to_string() }, ],
-            description: "Just a unit test".to_string(),
+            toolbox: vec![AgentTool { code: "get-weather".to_string(), r#type: "function".to_string() }],
         };
+
+        let tool_registry: SafeToolRegistry = ToolRegistry::new();
+
+        let message = vec![
+            PromptMessage::System { role: "system".to_string(), content: "You are a world renowned weather reporter.".to_string(), name: None },
+            PromptMessage::User { role: "user".to_string(), content: vec![UserContent::Text { type_: "text".to_string(), text: "What's the weather like in Boston today?".to_string() }], name: None },
+        ];
 
         let factory = AgentFactory::new(config.clone());
 
-        let agent = factory.instance(agent_config).await;
+        let agent = &factory.instance(agent_config).await.unwrap();
 
-        assert!(agent.is_ok());
+        let prompt = Prompt::new_message_for_agent(agent, message, &tool_registry,);
 
-        // let prompt = Prompt::new_message_for_agent(agent, messages, &self.tool_registry,);
+        let result = agent.chat_completion(&prompt).await;
 
-        // let result = agent.chat_completion(&prompt).await?;
+        assert!(result.is_ok());
+
+        println!("{:?}", result.unwrap());
 
     }
 }

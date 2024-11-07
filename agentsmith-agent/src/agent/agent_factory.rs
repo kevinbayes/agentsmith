@@ -1,5 +1,3 @@
-use std::sync::Arc;
-use short_uuid::ShortUuid;
 use agentsmith_common::config::config::Config;
 use agentsmith_common::error::error::{SystemError, SystemResult};
 use crate::agent::agent::{Agent, AgentConfig};
@@ -58,7 +56,9 @@ mod tests {
     use crate::llm::llm_factory::LLMFactory;
     use crate::llm::prompt::{Prompt, PromptMessage, UserContent};
     use crate::memory::memory::MemoryConfiguration;
+    use crate::tools::agent_tool::CallAgentTool;
     use crate::tools::registry::{SafeToolRegistry, ToolRegistry};
+    use crate::tools::tool::{Tool as ActualTool, ToolType};
     use super::*;
 
 
@@ -95,15 +95,34 @@ mod tests {
         let agent_config = AgentConfig {
             id: "candidate_agent".to_string(),
             name: "Unit Test".to_string(),
-            description: "".to_string(),
+            description: "You are a world renowned weather reporter.".to_string(),
             r#type: "simple".to_string(),
-            system_prompt: Some("test".to_string()),
+            system_prompt: Some("You are a world renowned weather reporter.".to_string()),
             llm: llm_config,
             memory: MemoryConfiguration { r#type: "messages".to_string(), },
             toolbox: vec![AgentTool { code: "get-weather".to_string(), r#type: "function".to_string() }],
         };
 
         let tool_registry: SafeToolRegistry = ToolRegistry::new();
+        tool_registry.write().unwrap().register("get-weather".to_string(), ActualTool::CallAgentTool(CallAgentTool {
+            r#type: ToolType::Agent,
+            code: "get-weather".to_string(),
+            description: "Get the weather for a given location in celcius or fahrenheit".to_string(),
+            input_schema: json!({
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }),
+        }));
 
         let message = vec![
             PromptMessage::System { role: "system".to_string(), content: "You are a world renowned weather reporter.".to_string(), name: None },

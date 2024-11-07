@@ -8,9 +8,6 @@ pub struct CallAgentTool {
     pub r#type: ToolType,
     pub code: String,
     pub description: String,
-    pub url: String,
-    pub method: String,
-    pub headers: String,
     pub input_schema: Value,
 }
 

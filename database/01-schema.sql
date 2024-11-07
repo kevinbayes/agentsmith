@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS agentsmith.counter (
 ) ENGINE=InnoDB;
 
 
+USE agentsmith;
 CREATE PROCEDURE IF NOT EXISTS get_next_id (IN counter bigint)
 BEGIN
     UPDATE agentsmith.counter

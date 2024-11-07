@@ -40,6 +40,7 @@ impl VectorGateway {
             })
             ?;
 
+
         for item in collections.iter() {
 
             let creation_result =

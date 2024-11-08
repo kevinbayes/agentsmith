@@ -5,7 +5,7 @@ use crate::agent::simple_agent::SimpleAgent;
 use crate::llm::llm_factory::LLMFactory;
 use crate::memory::memory::MemoryFactory;
 
-struct AgentFactory {
+pub struct AgentFactory {
     config: Config,
     llm_factory: LLMFactory,
     memory_factory: MemoryFactory

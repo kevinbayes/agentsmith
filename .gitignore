@@ -16,3 +16,4 @@ target/
 /local/qdrant/
 /tmp/
 /agentsmith-agent/secret-llm-config.json
+/agentsmith-runtime/config.json

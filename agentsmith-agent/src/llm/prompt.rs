@@ -6,7 +6,7 @@ use serde_json::Value;
 use agentsmith_common::error::error::SystemError;
 use crate::agent::agent::Agent;
 use crate::tools::registry::{SafeToolRegistry, ToolRegistry};
-use crate::tools::tool::Tool as ActualTool;
+use crate::tools::tool::{SimpleToolExecution, Tool as ActualTool, ToolResult};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Prompt {
@@ -71,6 +71,18 @@ pub enum PromptMessage {
         tool_calls: Option<AssistantToolCall>,
     },
     Tool { role: String, content: Vec<String>, name: String },
+}
+
+impl PromptMessage {
+
+    pub fn from_tool_result(tool_result: &ToolResult, tool: &ActualTool) -> Self {
+
+        Self::Tool {
+            name: tool_result.code.clone(),
+            content: tool.format_result(tool_result.value.clone()),
+            role: "tool".to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -167,7 +179,7 @@ impl Into<Tool> for ActualTool {
                     input_schema: tool.input_schema.clone(),
                 }
             },
-            crate::tools::tool::Tool::WebClientTool(tool) => {
+            crate::tools::tool::Tool::SimpleJsonWebClientTool(tool) => {
                 Tool {
                     r#type: Some(format!("{:?}", tool.r#type)),
                     description: tool.description.clone(),

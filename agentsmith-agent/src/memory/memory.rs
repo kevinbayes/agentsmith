@@ -12,7 +12,7 @@ pub enum Memory {
 
 #[derive(Clone, Debug)]
 pub struct MemoryConfiguration {
-    pub(crate) r#type: String,
+    pub r#type: String,
 }
 
 pub struct MemoryFactory {

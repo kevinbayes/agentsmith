@@ -188,7 +188,7 @@ pub enum OpenAIRequestMessage {
     Assistant {
         role: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        content: Option<Vec<AssistantContent>>,
+        content: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         refusal: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,7 +196,11 @@ pub enum OpenAIRequestMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_calls: Option<AssistantToolCall>,
     },
-    Tool { role: String, content: Vec<String>, name: String },
+    Tool {
+        role: String,
+        content: Vec<String>,
+        tool_call_id: String
+    },
 }
 
 impl OpenAIRequestMessage {
@@ -212,11 +216,25 @@ impl OpenAIRequestMessage {
                 OpenAIRequestMessage::User { role, content, name }
             }
             PromptMessage::Assistant { role, content, refusal, name, tool_calls } => {
-                let content_content = if content.is_none() {
+                let content_content: Option<String> = if content.is_none() {
                     None
                 } else {
-                    let content = content.unwrap().iter().map(AssistantContent::from_prompt_assistant_content).collect();
-                    Some(content)
+
+                    let first_binder = content.unwrap();
+                    let first = first_binder.first().clone();
+                    if let Some(assistant_content) = first {
+                        let assistant_content = AssistantContent::from_prompt_assistant_content(assistant_content);
+                        match assistant_content {
+                            AssistantContent::Text(t) => {
+                                Some(t.clone())
+                            }
+                            AssistantContent::Image { .. } => {
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
                 };
 
                 let tool_calls = if tool_calls.is_none() {
@@ -227,8 +245,8 @@ impl OpenAIRequestMessage {
 
                 OpenAIRequestMessage::Assistant { role, content: content_content, refusal, name, tool_calls }
             }
-            PromptMessage::Tool { role, content, name } => {
-                OpenAIRequestMessage::Tool { role, content, name }
+            PromptMessage::Tool { role, content, name, tool_call_id } => {
+                OpenAIRequestMessage::Tool { role, content, tool_call_id }
             }
         }
     }
@@ -278,11 +296,7 @@ impl UserContent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AssistantContent {
-    Text {
-        #[serde(rename = "type")]
-        type_: String,
-        text: String,
-    },
+    Text (String),
     Image {
         #[serde(rename = "type")]
         type_: String,
@@ -291,14 +305,12 @@ pub enum AssistantContent {
 }
 
 impl AssistantContent {
+
     pub fn from_prompt_assistant_content(content: &PromptAssistantContent) -> Self {
 
         match content {
             PromptAssistantContent::Text { type_, text } => {
-                AssistantContent::Text {
-                    type_: type_.clone(),
-                    text: text.clone()
-                }
+                AssistantContent::Text(text.clone())
             }
             PromptAssistantContent::Image { type_, content_type, image_url } => {
                 AssistantContent::Image {

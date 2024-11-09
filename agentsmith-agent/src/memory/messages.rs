@@ -29,7 +29,6 @@ impl RecordMemory for Messages {
     }
 
     async fn record_prompt_messages<'a>(&'a self, messages: &'a Vec<PromptMessage>) -> SystemResult<bool> {
-
         if messages.is_empty() {
             Ok(false)
         } else {

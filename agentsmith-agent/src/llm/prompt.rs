@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use agentsmith_common::error::error::SystemError;
 use crate::agent::agent::Agent;
+use crate::llm::llm::LLMResult;
 use crate::tools::registry::{SafeToolRegistry, ToolRegistry};
 use crate::tools::tool::{SimpleToolExecution, Tool as ActualTool, ToolResult};
 
@@ -70,14 +71,26 @@ pub enum PromptMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_calls: Option<AssistantToolCall>,
     },
-    Tool { role: String, content: Vec<String>, name: String },
+    Tool { role: String, tool_call_id: String, content: Vec<String>, name: String },
 }
 
 impl PromptMessage {
 
+    pub fn from_assistant_message(llm_result: &LLMResult) -> Self {
+
+        Self::Assistant {
+            role: "assistant".to_string(),
+            content: Some(vec![AssistantContent::Text { type_: "text".to_string(), text: llm_result.message.clone() }]),
+            refusal: None,
+            name: None,
+            tool_calls: None,
+        }
+    }
+
     pub fn from_tool_result(tool_result: &ToolResult, tool: &ActualTool) -> Self {
 
         Self::Tool {
+            tool_call_id: tool_result.id.clone(),
             name: tool_result.code.clone(),
             content: tool.format_result(tool_result.value.clone()),
             role: "tool".to_string(),

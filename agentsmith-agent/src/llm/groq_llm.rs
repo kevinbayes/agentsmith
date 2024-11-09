@@ -62,24 +62,31 @@ impl GenerateText for GroqLLM {
             .build()
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                SystemError::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 1 }
             })?;
-        info!("Request: {:?}", request);
-        info!("Request Body: {:?}", request_obj);
+        println!("Request: {:?}", request);
+        println!("Request Body: {:?}", request_obj);
 
-        let res = client.execute(request)
+        let res_string: String = client.execute(request)
             .map_err(|e| {
                 println!("Error: {:?}", e);
                 SystemError::AgentError { id: 0, code: 2 }
             })
             .await?
-            .json::<OpenAIGenerateResponse>()
+            .text()
             .map_err(|e| {
                 println!("Error: {:?}", e);
-                SystemError::AgentError { id: 0, code: 2 }
+                SystemError::AgentError { id: 0, code: 3 }
             })
             .await?;
-        //
+
+        println!("Response: {:?}", res_string);
+
+        let res = serde_json::from_str(&res_string)
+            .map_err(|e| {
+                SystemError::AgentError { id: 0, code: 4 }
+            })?;
+
         Ok(LLMResult::from_groq(&res))
     }
 }

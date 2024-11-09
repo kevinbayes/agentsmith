@@ -25,6 +25,7 @@ struct SwarmToolResults {
     tool_results: Vec<ToolResult>,
 }
 
+
 pub struct SwarmResult {
     pub memory: Arc<Memory>,
 }
@@ -58,7 +59,9 @@ impl Swarm {
     }
 
 
-    pub async fn run(&'static mut self) -> SystemResult<SwarmResult> {
+    pub async fn run(&mut self, initial: PromptMessage) -> SystemResult<SwarmResult> {
+
+        let _ = self.memory.record_prompt_messages(&vec![initial]).await;
 
         while self.turn < self.max_turns {
 
@@ -74,9 +77,12 @@ impl Swarm {
 
             let result = agent.chat_completion(&prompt).await?;
 
-            let make_tool_calls = result.tool_calls.is_empty();
+            let make_tool_calls = !result.tool_calls.is_empty();
 
-            if !make_tool_calls {
+            let assistant_message = PromptMessage::from_assistant_message(&result);
+            let _ = self.memory.record_prompt_message(&assistant_message).await;
+
+            if make_tool_calls {
 
                 let tool_results = self.handle_function_calls(result).await;
 
@@ -87,10 +93,9 @@ impl Swarm {
                     }
                 }
 
-                self.append_tool_call_result_to_memory(tool_results);
+                self.append_tool_call_result_to_memory(tool_results).await;
 
             } else {
-
                 self.turn = self.max_turns;
             }
 
@@ -207,23 +212,23 @@ mod tests {
 
         let config = read_config("./config.json").unwrap();
 
-        let cerebras_config = config.clone().config.gateways.registry
-            .get("cerebras_gateway")
+        let groq_config = config.clone().config.gateways.registry
+            .get("groq_gateway")
             .unwrap()
             .clone();
 
         let llm_config = LLMConfiguration {
-            provider: "cerebras".to_string(),
+            provider: "groq".to_string(),
             base_url: None,
-            model: "llama3.1-8b".to_string(),
+            model: "llama3-70b-8192".to_string(),
             temperature: None,
             credentials: LLMCredentials {
-                api_key: cerebras_config.api_key
+                api_key: groq_config.api_key
             },
             version: None,
             top_p: None,
             seed: None,
-            max_tokens: Some(200),
+            max_tokens: Some(500),
             stream: Some(false),
         };
 
@@ -242,7 +247,7 @@ mod tests {
         tool_registry.write().unwrap().register("get-weather".to_string(), ActualTool::CallAgentTool(CallAgentTool {
             r#type: ToolType::Agent,
             code: "get-weather".to_string(),
-            description: "Get the weather for a given location in celcius or fahrenheit".to_string(),
+            description: "Get the weather for a given location in celsius or fahrenheit".to_string(),
             input_schema: json!({
           "type": "object",
           "properties": {
@@ -259,23 +264,11 @@ mod tests {
         }),
         }));
 
-        let message = vec![
-            PromptMessage::System { role: "system".to_string(), content: "You are a world renowned weather reporter.".to_string(), name: None },
-            PromptMessage::User { role: "user".to_string(), content: vec![UserContent::Text { type_: "text".to_string(), text: "What's the weather like in Boston today?".to_string() }], name: None },
-        ];
+        let message = PromptMessage::User { role: "user".to_string(), content: vec![UserContent::Text { type_: "text".to_string(), text: "What is the weather like in Boston today?".to_string() }], name: None };
 
         let factory = AgentFactory::new(config.clone());
 
         let agent = &factory.instance(agent_config).await.unwrap();
-
-        let prompt = Prompt::new_message_for_agent(agent, message, &tool_registry,);
-
-        let result = agent.chat_completion(&prompt).await;
-
-        assert!(result.is_ok());
-
-        println!("{:?}", result.unwrap());
-
 
         let mut swarm = Swarm::new(
             Arc::new(vec![agent.clone()]),
@@ -283,6 +276,8 @@ mod tests {
             5,
         );
 
-        // swarm.run().await.unwrap();
+        let result = swarm.run(message).await.unwrap();
+
+        println!("all messages: {:?}", result.memory.retrieve_past_messages().await);
     }
 }

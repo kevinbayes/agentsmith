@@ -36,21 +36,33 @@ impl MemoryFactory {
 
 impl RetrieveMemory for Memory {
     async fn retrieve_memory_chunks(&self, collection: &str, query: &str) -> SystemResult<Vec<String>> {
-        todo!()
+        match self {
+            Memory::MESSAGES(memory) => memory.retrieve_memory_chunks(collection, query).await,
+            Memory::GENERAL(memory) => memory.retrieve_memory_chunks(collection, query).await,
+        }
     }
 
     async fn retrieve_past_messages(&self) -> SystemResult<Vec<PromptMessage>> {
-        todo!()
+        match self {
+            Memory::MESSAGES(memory) => memory.retrieve_past_messages().await,
+            Memory::GENERAL(memory) => memory.retrieve_past_messages().await,
+        }
     }
 }
 
 impl RecordMemory for Memory {
     async fn record_memory_chunk(&self, collection: &str, chunk: &str) -> SystemResult<bool> {
-        todo!()
+        match self {
+            Memory::MESSAGES(memory) => memory.record_memory_chunk(collection, chunk).await,
+            Memory::GENERAL(memory) => memory.record_memory_chunk(collection, chunk).await,
+        }
     }
 
     async fn record_prompt_messages<'a>(&'a self, messages: &'a Vec<PromptMessage>) -> SystemResult<bool> {
-        todo!()
+        match self {
+            Memory::MESSAGES(memory) => memory.record_prompt_messages(messages).await,
+            Memory::GENERAL(memory) => memory.record_prompt_messages(messages).await,
+        }
     }
 }
 
@@ -60,6 +72,9 @@ pub trait InitialiseMemory {
 
 pub trait RecordMemory {
     async fn record_memory_chunk(&self, collection: &str, chunk: &str) -> SystemResult<bool>;
+    async fn record_prompt_message(&self, message: &PromptMessage) -> SystemResult<bool> {
+        self.record_prompt_messages(&vec![message.clone()]).await
+    }
     async fn record_prompt_messages<'a>(&'a self, messages: &'a Vec<PromptMessage>) -> SystemResult<bool>;
 }
 

@@ -3,7 +3,7 @@ Content-Type: application/json
 Authorization: Bearer {{groq_token}}
 
 {
-  "model": "llama3-8b-8192",
+  "model": "llama3-70b-8192",
   "messages": [
     {
       "role": "user",
@@ -34,4 +34,73 @@ Authorization: Bearer {{groq_token}}
     }
   ],
   "tool_choice": "auto"
+}
+
+###
+POST https://api.groq.com/openai/v1/chat/completions
+Content-Type: application/json
+Authorization: Bearer {{groq_token}}
+
+
+{
+  "model": "llama3-8b-8192",
+  "stream": false,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a world renowned weather reporter."
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "What is the weather like in Boston today?"
+        }
+      ]
+    },
+    { "role": "assistant", "content": "The weather is 10 degrees celsius"},
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Summaries the weather today."
+        }
+      ]
+    }
+  ],
+  "temperature": 1.0,
+  "max_tokens": 500,
+  "seed": 0,
+  "top_p": 1,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get-weather",
+        "description": "Get the weather for a given location in celsius or fahrenheit",
+        "parameters": {
+          "properties": {
+            "location": {
+              "description": "The city and state, e.g. San Francisco, CA",
+              "type": "string"
+            },
+            "unit": {
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ],
+          "type": "object"
+        }
+      }
+    }
+  ],
+  "parallel_tool_calls": true
 }

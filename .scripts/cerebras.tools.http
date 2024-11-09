@@ -17,7 +17,7 @@ Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "model": "llama3.1-8b",
+  "model": "llama3.1-70b",
   "stream": false,
   "messages": [
     {
@@ -65,22 +65,11 @@ Content-Type: application/json
   "model": "llama3.1-8b",
   "stream": false,
   "messages": [
-    {
-      "role": "system",
-      "content": "You are a world renowned weather reporter."
-    },
-    {
-      "role": "user",
-      "content": [
-        {
-          "type": "text",
-          "text": "What's the weather like in Boston today?"
-        }
-      ]
-    }
+    { "role": "system", "content": "You are a world renowned weather reporter." },
+    { "role": "user", "content": [ { "type": "text", "text": "What is the weather like in Boston today?" } ] }
   ],
   "temperature": 1.0,
-  "max_tokens": 500,
+  "max_tokens": 200,
   "seed": 0,
   "top_p": 1,
   "tools": [
@@ -107,6 +96,68 @@ Content-Type: application/json
     }
   ],
   "parallel_tool_calls" : true
+}
+
+###
+
+
+###
+
+POST https://api.cerebras.ai/v1/chat/completions
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "model": "llama3.1-70b",
+  "stream": false,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a world renowned weather reporter."
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "What is the temperature in Boston today in degrees celcius?"
+        }
+      ]
+    }
+  ],
+  "temperature": 1.0,
+  "max_tokens": 500,
+  "seed": 0,
+  "top_p": 1,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get-weather",
+        "description": "Get the weather for a given location in celsius or fahrenheit",
+        "parameters": {
+          "properties": {
+            "location": {
+              "description": "The city and state, e.g. San Francisco, CA",
+              "type": "string"
+            },
+            "unit": {
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ],
+          "type": "object"
+        }
+      }
+    }
+  ],
+  "parallel_tool_calls": true
 }
 
 ###

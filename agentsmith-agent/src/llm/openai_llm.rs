@@ -5,7 +5,7 @@ use chrono::Local;
 use futures_util::TryFutureExt;
 use reqwest::{Proxy, Url};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use r2d2_redis::redis::Commands;
@@ -194,11 +194,11 @@ pub enum OpenAIRequestMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        tool_calls: Option<AssistantToolCall>,
+        tool_calls: Option<Vec<AssistantToolCall>>,
     },
     Tool {
         role: String,
-        content: Vec<String>,
+        content: String,
         tool_call_id: String
     },
 }
@@ -237,16 +237,20 @@ impl OpenAIRequestMessage {
                     }
                 };
 
-                let tool_calls = if tool_calls.is_none() {
-                    None
+                let actual_calls = if let Some(tool_calls_vec) = tool_calls {
+                    AssistantToolCall::from_prompt_assistant_tool_calls(tool_calls_vec)
                 } else {
-                    Some(AssistantToolCall::from_prompt_assistant_tool_calls(tool_calls.unwrap()))
+                    None
                 };
 
-                OpenAIRequestMessage::Assistant { role, content: content_content, refusal, name, tool_calls }
+                OpenAIRequestMessage::Assistant { role, content: content_content, refusal, name, tool_calls: actual_calls }
             }
             PromptMessage::Tool { role, content, name, tool_call_id } => {
-                OpenAIRequestMessage::Tool { role, content, tool_call_id }
+                let first = match content.first() {
+                    Some(s) => s.to_string(),
+                    None => "default".to_string(),
+                };
+                OpenAIRequestMessage::Tool { role, content: first.clone(), tool_call_id }
             }
         }
     }
@@ -332,12 +336,34 @@ pub struct AssistantToolCall {
 
 impl AssistantToolCall {
 
-    pub fn from_prompt_assistant_tool_calls(tool_call: PromptAssistantToolCall) -> Self {
+    pub fn from_prompt_assistant_tool_call(tool_call: &PromptAssistantToolCall) -> Self {
+
+        let function = tool_call.function.clone();
+        let name = function.get("name").unwrap().clone();
+        let name = name.as_str().unwrap();
+        let arguments = function.get("arguments").unwrap();
+        let function = json!({
+                "name": name.to_string(),
+                "arguments": arguments.to_string(),
+            });
 
         Self {
-            function: tool_call.function.clone(),
-            id: tool_call.id,
-            type_: tool_call.type_,
+            id: tool_call.id.clone(),
+            type_: tool_call.type_.clone(),
+            function,
+        }
+    }
+
+    pub fn from_prompt_assistant_tool_calls(tool_calls: Vec<PromptAssistantToolCall>) -> Option<Vec<Self>> {
+
+        let converted: Vec<Self> = tool_calls.iter()
+            .map(|item| Self::from_prompt_assistant_tool_call(item))
+            .collect();
+
+        if converted.is_empty() {
+            None
+        } else {
+            Some(converted)
         }
     }
 }

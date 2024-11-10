@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use agentsmith_common::error::error::SystemError;
 use crate::agent::agent::Agent;
-use crate::llm::llm::LLMResult;
+use crate::llm::llm::{LLMResult, LLMResultToolCall};
 use crate::tools::registry::{SafeToolRegistry, ToolRegistry};
 use crate::tools::tool::{SimpleToolExecution, Tool as ActualTool, ToolResult};
 
@@ -41,6 +41,8 @@ impl Prompt {
             None
         };
 
+        println!("messages: {:?}", messages.clone());
+
         Self::Messages { system: agent.system_prompt(), messages, tools, tool_choice }
     }
 }
@@ -69,7 +71,7 @@ pub enum PromptMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        tool_calls: Option<AssistantToolCall>,
+        tool_calls: Option<Vec<AssistantToolCall>>,
     },
     Tool { role: String, tool_call_id: String, content: Vec<String>, name: String },
 }
@@ -78,12 +80,20 @@ impl PromptMessage {
 
     pub fn from_assistant_message(llm_result: &LLMResult) -> Self {
 
+        let tool_calls = llm_result.tool_calls.clone();
+        let tool_calls: Vec<AssistantToolCall> = tool_calls.iter().map(|call| call.clone().into()).collect();
+        let tool_calls = if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        };
+
         Self::Assistant {
             role: "assistant".to_string(),
             content: Some(vec![AssistantContent::Text { type_: "text".to_string(), text: llm_result.message.clone() }]),
             refusal: None,
             name: None,
-            tool_calls: None,
+            tool_calls,
         }
     }
 
@@ -143,6 +153,23 @@ pub struct AssistantToolCall {
     pub type_: String,
     pub function: Value,
 }
+
+impl Into<LLMResultToolCall> for AssistantToolCall {
+
+    fn into(self) -> LLMResultToolCall {
+
+        let name = self.function.get("name").unwrap().as_str().expect("Must have name.");
+        let arguments = self.function.get("arguments").unwrap();
+
+        LLMResultToolCall {
+            id: self.id.clone(),
+            type_: self.type_,
+            name: name.to_string(),
+            input: Some(arguments.clone())
+        }
+    }
+}
+
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged)]

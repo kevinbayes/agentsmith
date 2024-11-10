@@ -245,7 +245,7 @@ mod tests {
 
         let tool_registry: SafeToolRegistry = ToolRegistry::new();
         tool_registry.write().unwrap().register("get-weather".to_string(), ActualTool::CallAgentTool(CallAgentTool {
-            r#type: ToolType::Agent,
+            r#type: ToolType::Function,
             code: "get-weather".to_string(),
             description: "Get the weather for a given location in celsius or fahrenheit".to_string(),
             input_schema: json!({

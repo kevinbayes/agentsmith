@@ -1,9 +1,9 @@
 use log::{debug, info};
 use crate::llm::anthropic_llm::{AnthropicGenerateResponse, Content};
 use crate::llm::openai_llm::OpenAIGenerateResponse;
-use crate::llm::prompt::Prompt;
+use crate::llm::prompt::{AssistantToolCall, Prompt};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LLMConfiguration {
@@ -116,6 +116,21 @@ impl LLMResultToolCall {
                     .collect())
             }
             None => None,
+        }
+    }
+}
+
+impl Into<AssistantToolCall> for LLMResultToolCall {
+    fn into(self) -> AssistantToolCall {
+        let arguments = self.input.clone();
+        let arguments = arguments.unwrap_or(json!({}));
+        AssistantToolCall {
+            id: self.id.clone(),
+            type_: self.type_,
+            function: json!({
+                "name": self.name.clone(),
+                "arguments": arguments,
+            }),
         }
     }
 }

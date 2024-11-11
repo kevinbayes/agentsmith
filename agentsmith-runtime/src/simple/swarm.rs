@@ -297,7 +297,7 @@ mod tests {
           },
           "required": ["message"]
         }),
-            |tool, input, response| { todo!() },
+            None,
         );
 
 

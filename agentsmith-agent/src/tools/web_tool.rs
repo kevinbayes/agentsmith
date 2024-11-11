@@ -22,6 +22,9 @@ pub struct SimpleJsonWebClientTool {
     client: Arc<reqwest::Client>,
 }
 
+fn default_post_processor<'a>(this: &SimpleJsonWebClientTool, input: &'a Value, result: &'a Value) -> &'a Value {
+    result
+}
 
 impl SimpleJsonWebClientTool {
     pub fn new(
@@ -35,7 +38,7 @@ impl SimpleJsonWebClientTool {
         timeout: u64,
         input_schema: Value,
         output_schema: Value,
-        post_process: for<'a> fn(&SimpleJsonWebClientTool, &'a Value, &'a Value) -> &'a Value,
+        post_process: Option<for<'a> fn(this: &SimpleJsonWebClientTool, input: &'a Value, result: &'a Value) -> &'a Value>,
     ) -> Self {
         let client = reqwest::ClientBuilder::new()
             .timeout(Duration::from_secs(timeout))
@@ -44,6 +47,12 @@ impl SimpleJsonWebClientTool {
             .default_headers(SimpleJsonWebClientTool::create_headers(headers))
             .build()
             .unwrap();
+
+        let post_process = if let Some(post_process_function) = post_process {
+            post_process_function
+        } else {
+            default_post_processor
+        };
 
         Self {
             r#type: ToolType::Function,
@@ -146,6 +155,7 @@ impl SimpleToolExecution for SimpleJsonWebClientTool {
             Ok(response) => {
                 let status_code = response.status().as_u16();
                 let body = self.response_body(response).await;
+                let body = (self.post_process)(self, input, &body);
                 json!({ "status_code": status_code, "body": body })
             }
             Err(error) => {

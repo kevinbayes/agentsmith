@@ -199,5 +199,60 @@
         "system_fingerprint": "fp_482c22a7bc"
       }
     }
+  },
+
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/agentsmith-agent/unittest/tools/web-tool/1"
+    },
+    "httpResponse": {
+      "body": {
+        "message": "hello world",
+        "location": "Test",
+        "temp": {
+          "unit": "celsius",
+          "amount": 100.0
+        }
+      }
+    }
+  },
+
+  {
+    "httpRequest": {
+      "method": "PUT",
+      "path": "/agentsmith-agent/unittest/tools/web-tool/1"
+    },
+    "httpResponse": {
+      "body": {
+        "message": "hello world",
+        "location": "Test",
+        "temp": {
+          "unit": "celsius",
+          "amount": 100.0
+        }
+      }
+    }
+  },
+  {
+    "httpRequest": {
+      "method": "GET",
+      "path": "/agentsmith-agent/unittest/tools/web-tool/1"
+    },
+    "httpResponse": {
+      "headers": {
+        "ContentType": [
+          "application/json"
+        ]
+      },
+      "body": {
+        "message": "hello world",
+        "location": "Test",
+        "temp": {
+          "unit": "celsius",
+          "amount": 100.0
+        }
+      }
+    }
   }
 ]

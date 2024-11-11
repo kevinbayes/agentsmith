@@ -27,7 +27,7 @@ pub trait SimpleToolExecution {
     async fn execute(&self, id: Option<String>, input: &Value) -> SystemResult<ToolResult>;
 
     fn format_result(&self, result_value: Value) -> Vec<String> {
-
+        println!("Tool result recording: {:?}", result_value);
         if result_value.is_null() {
             vec![]
         } else if result_value.is_object() {
@@ -35,6 +35,10 @@ pub trait SimpleToolExecution {
 
             if let Some(result) = result_value.get("result") {
                 messages.push(result.as_str().unwrap().to_string());
+            }
+
+            if let Some(result) = result_value.get("body") {
+                messages.push(result.clone().to_string());
             }
 
             if let Some(error) = result_value.get("error") {

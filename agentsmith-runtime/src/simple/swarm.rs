@@ -134,6 +134,7 @@ impl Swarm {
                             let tool_call_result = tool.execute(Some(tool_call.id.clone()), &tool_call.input.unwrap_or(json!({}))).await;
                             match tool_call_result {
                                 Ok(tool_call_value) => {
+                                    println!("Tool response: {:?}", tool_call_value);
                                     tool_results.push(ToolResult {
                                         id: tool_call_value.id.clone(),
                                         code: tool_call_value.code.clone(),
@@ -199,6 +200,7 @@ mod tests {
     use agentsmith_agent::tools::agent_tool::CallAgentTool;
     use agentsmith_agent::tools::registry::{SafeToolRegistry, ToolRegistry};
     use agentsmith_agent::tools::tool::{Tool as ActualTool, ToolType};
+    use agentsmith_agent::tools::web_tool::SimpleJsonWebClientTool;
     use super::*;
 
 
@@ -244,25 +246,62 @@ mod tests {
         };
 
         let tool_registry: SafeToolRegistry = ToolRegistry::new();
-        tool_registry.write().unwrap().register("get-weather".to_string(), ActualTool::CallAgentTool(CallAgentTool {
-            r#type: ToolType::Function,
-            code: "get-weather".to_string(),
-            description: "Get the weather for a given location in celsius or fahrenheit".to_string(),
-            input_schema: json!({
+
+        let get_weather_tool = SimpleJsonWebClientTool::new(
+            "get-weather".to_string(),
+            "Get the weather for the unit test".to_string(),
+            "http://localhost:1080/agentsmith-agent/unittest/tools/web-tool/1".to_string(),
+            "get".to_string(),
+            HashMap::new(),
+            1000,
+            1000,
+            1000,
+            json!({
           "type": "object",
           "properties": {
-            "location": {
-              "type": "string",
-              "description": "The city and state, e.g. San Francisco, CA"
-            },
             "unit": {
               "type": "string",
-              "enum": ["celsius", "fahrenheit"]
+              "description": "Degrees celsius or fahrenheit."
+            },
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA."
             }
           },
           "required": ["location"]
         }),
-        }));
+            json!({
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "General message"
+            },
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "temp": {
+              "type": "object",
+              "properties": {
+                    "unit": {
+                                "type": "string",
+                                "description": "Unit of measure"
+                            },
+                    "amount": {
+                                "type": "number",
+                                "description": "numeric representation"
+                            }
+              }
+            }
+          },
+          "required": ["message"]
+        }),
+            |tool, input, response| { todo!() },
+        );
+
+
+        tool_registry.write().unwrap().register("get-weather".to_string(), ActualTool::SimpleJsonWebClientTool(get_weather_tool));
 
         let message = PromptMessage::User { role: "user".to_string(), content: vec![UserContent::Text { type_: "text".to_string(), text: "What is the weather like in Boston today?".to_string() }], name: None };
 

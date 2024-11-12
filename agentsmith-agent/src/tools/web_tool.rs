@@ -245,7 +245,7 @@ mod tests {
           },
           "required": ["message"]
         }),
-            |tool, input, response| { todo!() },
+            None,
         );
 
         let input = json!({
@@ -322,7 +322,7 @@ mod tests {
           },
           "required": ["message"]
         }),
-            |tool, input, response| { todo!() },
+            None,
         );
 
         let input = json!({

@@ -31,7 +31,7 @@ pub async fn get_person_by_id(id: String, tenant: String, database_pool: &MySqlP
                 None
             }
         },
-        Err(e) => {
+        Err(_e) => {
             None
         }
     }

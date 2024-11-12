@@ -2,6 +2,7 @@
 name = "agentsmith-agent"
 version = "0.1.0"
 edition = "2021"
+authors = ["Kevin Bayes"]
 
 [dependencies]
 pyo3 = { version = "0.22.3", features = ["extension-module"] }

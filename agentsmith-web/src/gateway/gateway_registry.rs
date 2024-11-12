@@ -18,7 +18,7 @@ impl GatewayRegistry {
         let text_embedding_gateway = TextEmbeddingGateway::new(config.clone());
         let vector_gateway = VectorGateway::new(config.clone());
 
-        let _ = vector_gateway.init_collections().await;
+        let _ = vector_gateway.init_collections(vec![]).await;
 
         Self { text_embedding_gateway, vector_gateway }
     }

@@ -25,6 +25,23 @@ services:
         source: ./mockserver/
         target: /config
 
+  graph:
+    image: arangodb:3.12
+    #   command: arangod --database.auto-upgrade
+    ports:
+      - "8529:8529"
+    environment:
+      - ARANGO_ROOT_PASSWORD=password
+    volumes:
+      - type: bind
+        read_only: false
+        source: ./data/arango/data/
+        target: /var/lib/arangodb3
+      - source: ./data/arango/backup/
+        target: /opt/backup/
+        read_only: false
+        type: bind
+
 
   database:
     image: mysql:8
@@ -52,3 +69,4 @@ services:
           memory: 2048M
         reservations:
           memory: 8M
+

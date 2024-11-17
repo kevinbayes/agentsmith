@@ -1,0 +1,50 @@
+name: agentsmith-worker # you probably want to 'snapcraft register <name>'
+base: core24 # the base snap is the execution environment for this snap
+version: '0.1' # just for humans, typically '1.2+git' or '1.3.2'
+summary: Worker for local agentsmith environment.
+description: |
+  The worker is capable of communicating with a server to understand what agent runtime to manage locally
+  and what work to complete locally using automation.
+
+grade: devel # must be 'stable' to release into candidate/stable channels
+confinement: devmode # use 'strict' once you have the right plugs and slots
+
+parts:
+  agentsmith-worker:
+    plugin: rust
+    source: .
+    build-packages:
+      # Essential build dependencies
+      - build-essential
+      - pkg-config
+      - libssl-dev
+      - openssl
+      - perl  # Sometimes needed for OpenSSL build scripts
+
+    # Add runtime dependencies
+    stage-packages:
+      - libssl3
+
+    build-environment:
+      - PKG_CONFIG_PATH: "/usr/lib/x86_64-linux-gnu/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+      - OPENSSL_DIR: "/usr"
+      - OPENSSL_LIB_DIR: "/usr/lib/x86_64-linux-gnu"
+      - OPENSSL_INCLUDE_DIR: "/usr/include"
+      - OPENSSL_STATIC: "false"
+
+    override-build: |
+      
+      export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
+
+      cargo build --release --workspace
+      
+      mkdir -p $CRAFT_PART_INSTALL/bin
+      
+      cp ./target/release/agentsmith-worker $CRAFT_PART_INSTALL/bin/    
+
+apps:
+  agentsmith-worker:
+    command: bin/agentsmith-worker
+    plugs:
+      - network
+      - network-bind

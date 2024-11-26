@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use agentsmith_common::config::config::Config;
 use agentsmith_common::error::error::{SystemError, SystemResult};
 use crate::llm::prompt::PromptMessage;
-use crate::memory::memory::{InitialiseMemory, RecordMemory, RetrieveMemory};
+use crate::memory::memory::{InitialiseMemory, MemoryBlock, MemoryContext, RecordMemory, RetrieveMemory};
 
 #[derive(Clone)]
 pub struct Messages {
@@ -24,11 +24,11 @@ impl Messages {
 
 impl RecordMemory for Messages {
 
-    async fn record_memory_chunk(&self, collection: &str, chunk: &str) -> SystemResult<bool> {
+    async fn record_memory_chunk(&self, chunk: &str) -> SystemResult<bool> {
         Ok(true)
     }
 
-    async fn record_prompt_messages<'a>(&'a self, messages: &'a Vec<PromptMessage>) -> SystemResult<bool> {
+    async fn record_prompt_messages<'a>(&'a self, context: &MemoryContext, messages: &'a Vec<PromptMessage>) -> SystemResult<bool> {
         if messages.is_empty() {
             Ok(false)
         } else {
@@ -41,11 +41,11 @@ impl RecordMemory for Messages {
 
 impl RetrieveMemory for Messages {
 
-    async fn retrieve_past_messages(&self) -> SystemResult<Vec<PromptMessage>> {
+    async fn retrieve_past_n_messages(&self, context: &MemoryContext, last_n: i32) -> SystemResult<Vec<PromptMessage>> {
         Ok(self.message_log.read().unwrap().iter().cloned().collect())
     }
 
-    async fn retrieve_memory_chunks(&self, collection: &str, query: &str) -> SystemResult<Vec<String>> {
+    async fn retrieve_memory_chunks(&self, query: &str) -> SystemResult<Vec<MemoryBlock>> {
         Ok(vec![])
     }
 }
@@ -71,15 +71,17 @@ mod tests {
 
         tracing_subscriber::fmt::init();
 
-        let client = Qdrant::from_url("http://localhost:6333").build().unwrap();
-
         let memory = Messages::new();
 
-        let current_storage = memory.retrieve_past_messages().await;
+        let context = MemoryContext {
+            interaction_id: "ut".to_string(),
+        };
+
+        let current_storage = memory.retrieve_past_messages(&context).await;
 
         assert_eq!(current_storage.unwrap().len(), 0);
 
-        let result_true = memory.record_prompt_messages(&vec![PromptMessage::User {
+        let result_true = memory.record_prompt_messages(&context, &vec![PromptMessage::User {
             role: "user".to_string(),
             content: vec![UserContent::Text {
                 type_: "text".to_string(),
@@ -90,11 +92,11 @@ mod tests {
 
         assert!(result_true);
 
-        let result_false = memory.record_prompt_messages(&vec![]).await.unwrap();
+        let result_false = memory.record_prompt_messages(&context, &vec![]).await.unwrap();
 
         assert!(!result_false);
 
-        let current_storage = memory.retrieve_past_messages().await.unwrap();
+        let current_storage = memory.retrieve_past_messages(&context).await.unwrap();
 
         assert_eq!(current_storage.len(), 1);
     }

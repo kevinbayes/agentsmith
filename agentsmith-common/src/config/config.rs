@@ -1,7 +1,8 @@
 use std::{fs, io};
 use std::collections::HashMap;
 use std::io::Read;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use crate::config::arango::ArangoConfig;
 
 pub fn read_config(file_path: &str) -> Result<Config, io::Error> {
 
@@ -27,6 +28,7 @@ pub struct ServerConfig {
     pub redis: RedisConfig,
     pub qdrant: QdrantConfig,
     pub database: DatabaseConfig,
+    pub arango: Option<ArangoConfig>,
     pub host: HostConfig,
     pub security: SecurityConfig,
     pub gateways: GatewaysConfig,
@@ -49,7 +51,7 @@ pub struct GatewayConfig {
     pub model: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SecurityConfig {
     // Define your configuration structure
     #[serde(rename = "oauth")]
@@ -59,7 +61,7 @@ pub struct SecurityConfig {
     pub jwt: SecurityJwtConfig,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct OAuthConfig {
     // Define your configuration structure
     #[serde(rename = "jwks_domain")]
@@ -72,7 +74,7 @@ pub struct OAuthConfig {
     pub audience: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SecurityJwtConfig {
     // Define your configuration structure
     #[serde(rename = "secret")]
@@ -81,14 +83,14 @@ pub struct SecurityJwtConfig {
     pub issuer: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct HostConfig {
     // Define your configuration structure
     pub host: String,
     pub port: i32,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RedisConfig {
     // Define your configuration structure
     pub host: String,
@@ -96,13 +98,13 @@ pub struct RedisConfig {
 }
 
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct QdrantConfig {
     // Define your configuration structure
     pub host: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DatabaseConfig {
     // Define your configuration structure
     pub connection: String,

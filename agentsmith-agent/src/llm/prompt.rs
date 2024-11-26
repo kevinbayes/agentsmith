@@ -106,6 +106,24 @@ impl PromptMessage {
             role: "tool".to_string(),
         }
     }
+
+
+    pub fn role(&self) -> &String {
+        match self {
+            PromptMessage::System { role, .. } => {
+                role
+            }
+            PromptMessage::User { role, .. } => {
+                role
+            }
+            PromptMessage::Assistant { role, .. } => {
+                role
+            }
+            PromptMessage::Tool { role, .. } => {
+                role
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

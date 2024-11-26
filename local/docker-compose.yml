@@ -32,15 +32,15 @@ services:
       - "8529:8529"
     environment:
       - ARANGO_ROOT_PASSWORD=password
-    volumes:
-      - type: bind
-        read_only: false
-        source: ./data/arango/data/
-        target: /var/lib/arangodb3
-      - source: ./data/arango/backup/
-        target: /opt/backup/
-        read_only: false
-        type: bind
+#    volumes:
+#      - type: bind
+#        read_only: false
+#        source: ./data/arango/data/
+#        target: /var/lib/arangodb3
+#      - source: ./data/arango/backup/
+#        target: /opt/backup/
+#        read_only: false
+#        type: bind
 
 
   database:

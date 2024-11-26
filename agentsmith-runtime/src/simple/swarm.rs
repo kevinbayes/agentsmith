@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use agentsmith_agent::agent::agent::Agent;
-use agentsmith_agent::memory::memory::{Memory, RecordMemory, RetrieveMemory};
+use agentsmith_agent::memory::memory::{Memory, MemoryContext, RecordMemory, RetrieveMemory};
 use agentsmith_agent::memory::messages::Messages;
 use std::sync::Arc;
 use serde_json::json;
@@ -9,8 +9,10 @@ use agentsmith_agent::llm::prompt::{Prompt, PromptMessage, Tool};
 use agentsmith_agent::tools::registry::{SafeToolRegistry,};
 use agentsmith_agent::tools::tool::{SimpleToolExecution, ToolResult};
 use agentsmith_common::error::error::SystemResult;
+use uuid::{uuid, Uuid};
 
 pub struct Swarm {
+    pub memory_context: Arc<MemoryContext>,
     pub memory: Arc<Memory>,
     pub agents: Arc<Vec<Agent>>,
     pub tool_registry: Arc<SafeToolRegistry>,
@@ -38,9 +40,12 @@ impl Swarm {
             panic!("No agents configured, must have at least one!");
         }
 
+        let interaction_id = Uuid::new_v4().to_string();
+
         let initial_agent = agents.first().unwrap().clone().id().to_string();
 
         Self {
+            memory_context: Arc::new(MemoryContext { interaction_id }),
             memory: Arc::new(Memory::MESSAGES(Messages::new())),
             agents: agents.clone(),
             tool_registry: Arc::new(tool_registry.clone()),
@@ -61,7 +66,7 @@ impl Swarm {
 
     pub async fn run(&mut self, initial: PromptMessage) -> SystemResult<SwarmResult> {
 
-        let _ = self.memory.record_prompt_messages(&vec![initial]).await;
+        let _ = self.memory.record_prompt_messages(&self.memory_context, &vec![initial]).await;
 
         while self.turn < self.max_turns {
 
@@ -69,7 +74,7 @@ impl Swarm {
                 .find(|item| item.id() == self.active_agent.clone())
                 .unwrap();
 
-            let messages = self.memory.retrieve_past_messages()
+            let messages = self.memory.retrieve_past_messages(&self.memory_context)
                 .await?
                 .clone();
 
@@ -80,7 +85,7 @@ impl Swarm {
             let make_tool_calls = !result.tool_calls.is_empty();
 
             let assistant_message = PromptMessage::from_assistant_message(&result);
-            let _ = self.memory.record_prompt_message(&assistant_message).await;
+            let _ = self.memory.record_prompt_message(&self.memory_context, &assistant_message).await;
 
             if make_tool_calls {
 
@@ -174,7 +179,7 @@ impl Swarm {
                 let prompt_message = PromptMessage::from_tool_result(
                     &tool_result, tool.as_ref()
                 );
-                self.memory.record_prompt_messages(&vec![prompt_message]).await.unwrap();
+                self.memory.record_prompt_messages(&self.memory_context, &vec![prompt_message]).await.unwrap();
             }
         }
     }
@@ -317,6 +322,6 @@ mod tests {
 
         let result = swarm.run(message).await.unwrap();
 
-        println!("all messages: {:?}", result.memory.retrieve_past_messages().await);
+        println!("all messages: {:?}", result.memory.retrieve_past_messages(&swarm.memory_context).await);
     }
 }

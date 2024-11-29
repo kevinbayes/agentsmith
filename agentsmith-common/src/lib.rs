@@ -5,6 +5,7 @@ pub mod model;
 pub mod security;
 pub mod redis;
 pub mod config;
+pub mod disk;
 
 pub fn add(left: u64, right: u64) -> u64 {
     left + right

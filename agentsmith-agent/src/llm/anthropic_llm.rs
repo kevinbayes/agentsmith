@@ -392,6 +392,7 @@ impl AnthropicLLM {
 }
 
 impl GenerateText for AnthropicLLM {
+
     async fn generate(&self, prompt: &Prompt) -> SystemResult<LLMResult> {
 
         let global_config = self.global_config.clone();

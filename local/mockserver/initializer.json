@@ -48,6 +48,43 @@
   {
     "httpRequest": {
       "method": "POST",
+      "path": "/cerebras-architect/v1/chat/completions"
+    },
+    "httpResponse": {
+      "body": {
+        "id": "chatcmpl-70278aaf-9b20-4e53-927d-052ad10b257c",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "**Echo API Project Task Backlog**\n=====================================\n\n**Task Backlog in JSON Format**\n```json\n{\n    \"tasks\": [\n        {\n            \"task\": \"Create project directory and initialize Rust project\",\n            \"description\": \"Create a new directory for the Echo API project and initialize a new Rust project using Cargo.\"\n        },\n        {\n            \"task\": \"Set up Axum as the web framework\",\n            \"description\": \"Add Axum as a dependency in the Cargo.toml file and create a basic Axum application.\"\n        },\n        {\n            \"task\": \"Create Echo API endpoint\",\n            \"description\": \"Create a new endpoint using Axum that handles HTTP requests and returns the echoed input as JSON.\"\n        },\n        {\n            \"task\": \"Implement header extraction and serialization\",\n            \"description\": \"Extract headers from incoming requests and serialize them into a JSON-compatible format.\"\n        },\n        {\n            \"task\": \"Implement query parameter extraction and serialization\",\n            \"description\": \"Extract query parameters from incoming requests and serialize them into a JSON-compatible format.\"\n        },\n        {\n            \"task\": \"Implement path extraction and serialization\",\n            \"description\": \"Extract the path from incoming requests and serialize it into a JSON-compatible format.\"\n        },\n        {\n            \"task\": \"Implement method extraction and serialization\",\n            \"description\": \"Extract the HTTP method from incoming requests and serialize it into a JSON-compatible format.\"\n        },\n        {\n            \"task\": \"Implement body extraction and serialization\",\n            \"description\": \"Extract the request body from incoming requests and serialize it into a JSON-compatible format.\"\n        },\n        {\n            \"task\": \"Implement JSON response serialization\",\n            \"description\": \"Serialize the extracted data into a JSON response that includes headers, query parameters, path, method, and body.\"\n        },\n        {\n            \"task\": \"Test Echo API endpoint\",\n            \"description\": \"Write unit tests and integration tests to verify that the Echo API endpoint works as expected.\"\n        },\n        {\n            \"task\": \"Configure and run the application\",\n            \"description\": \"Configure the application to run using Axum's built-in development server or a production-ready server.\"\n        },\n        {\n            \"task\": \"Document the API\",\n            \"description\": \"Document the Echo API endpoint, including its endpoint URL, request body, and response format.\"\n        }\n    ]\n}\n```\nThis task backlog breaks down the project into individual tasks that cover the full requirements of the Echo API project. Each task is designed to be achievable and has a clear description of what needs to be done.",
+              "role": "assistant"
+            }
+          }
+        ],
+        "created": 1732899752,
+        "model": "llama3.1-70b",
+        "system_fingerprint": "fp_fe26f95222",
+        "object": "chat.completion",
+        "usage": {
+          "prompt_tokens": 725,
+          "completion_tokens": 524,
+          "total_tokens": 1249
+        },
+        "time_info": {
+          "queue_time": 0.000157431,
+          "prompt_time": 0.035599965,
+          "completion_time": 0.294893357,
+          "total_time": 0.33234548568725586,
+          "created": 1732899752
+        }
+      }
+    }
+  },
+  {
+    "httpRequest": {
+      "method": "POST",
       "path": "/groq/openai/v1/chat/completions"
     },
     "httpResponse": {
@@ -200,7 +237,6 @@
       }
     }
   },
-
   {
     "httpRequest": {
       "method": "POST",
@@ -217,7 +253,6 @@
       }
     }
   },
-
   {
     "httpRequest": {
       "method": "PUT",

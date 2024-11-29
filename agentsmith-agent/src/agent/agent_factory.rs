@@ -28,7 +28,7 @@ impl AgentFactory {
             "simple" => {
 
                 let memory = self.memory_factory
-                    .instance(agent_config.memory.clone())
+                    .instance(&agent_config.memory)
                     .await?;
 
                 let llm = self.llm_factory
@@ -99,7 +99,7 @@ mod tests {
             r#type: "simple".to_string(),
             system_prompt: Some("You are a world renowned weather reporter.".to_string()),
             llm: llm_config,
-            memory: MemoryConfiguration { r#type: "messages".to_string(), },
+            memory: MemoryConfiguration { r#type: "messages".to_string(), general: None },
             toolbox: vec![AgentTool { code: "get-weather".to_string(), r#type: "function".to_string() }],
         };
 

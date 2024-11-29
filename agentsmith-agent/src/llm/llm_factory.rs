@@ -14,11 +14,13 @@ use crate::llm::groq_llm::GroqLLM;
 use crate::llm::huggingface_tgi_llm::HuggingFaceLLM;
 use crate::llm::openai_llm::OpenAILLM;
 use crate::llm::prompt::Prompt;
+use crate::llm::sambanova_llm::SambanovaLLM;
 
 #[derive(Clone, Debug)]
 pub enum LLM {
     AnthropicLLM(AnthropicLLM),
     CerebrasLLM(CerebrasLLM),
+    SambanovaLLM(SambanovaLLM),
     GeminiLLM(GeminiLLM),
     GroqLLM(GroqLLM),
     GrokLLM(GrokLLM),
@@ -36,6 +38,7 @@ impl LLMClient for LLM {
         match self {
             LLM::AnthropicLLM(llm) => llm.generate(prompt).await,
             LLM::CerebrasLLM(llm) => llm.generate(prompt).await,
+            LLM::SambanovaLLM(llm) => llm.generate(prompt).await,
             LLM::GeminiLLM(llm) => llm.generate(prompt).await,
             LLM::GroqLLM(llm) => llm.generate(prompt).await,
             LLM::GrokLLM(llm) => llm.generate(prompt).await,
@@ -108,6 +111,13 @@ impl LLMFactory {
                     "cerebras" => {
                         //"llama3.1-8b"
                         let llm = &LLM::CerebrasLLM(CerebrasLLM::new(self.config.clone(), config));
+                        registry.register(key.to_string(), llm.clone());
+
+                        Ok(llm.clone())
+                    }
+                    "sambanova" => {
+                        //"llama3.1-8b"
+                        let llm = &LLM::SambanovaLLM(SambanovaLLM::new(self.config.clone(), config));
                         registry.register(key.to_string(), llm.clone());
 
                         Ok(llm.clone())

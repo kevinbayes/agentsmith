@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use crate::agent::agent::AgentAttributes;
 use crate::agent::agent_tool::AgentTool;
 use crate::llm::llm_factory::LLM;
 use crate::memory::memory::Memory;
@@ -6,8 +7,5 @@ use crate::memory::memory::Memory;
 #[derive(Clone)]
 pub struct HumanAgent {
     pub id: String,
-    pub name: String,
-    pub description: String,
-    pub tenant: String,
-    pub config: crate::agent::agent::AgentConfig,
+    pub attributes: AgentAttributes,
 }

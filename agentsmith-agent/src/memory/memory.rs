@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use agentsmith_common::config::config::Config;
 use agentsmith_common::error::error::{SystemError, SystemResult};
 use crate::llm::prompt::PromptMessage;
-use crate::memory::general::General;
+use crate::memory::general::{General, GeneralMemoryConfiguration};
 use crate::memory::messages::Messages;
 
 #[derive(Clone)]
@@ -10,15 +11,16 @@ pub enum Memory {
     GENERAL(General),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct MemoryBlock {
     pub address: String,
     pub string: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MemoryConfiguration {
     pub r#type: String,
+    pub general: Option<GeneralMemoryConfiguration>,
 }
 
 pub struct MemoryFactory {
@@ -32,10 +34,11 @@ impl MemoryFactory {
         }
     }
 
-    pub async fn instance(&self, memory_config: MemoryConfiguration) -> SystemResult<Memory> {
+    pub async fn instance(&self, memory_config: &MemoryConfiguration) -> SystemResult<Memory> {
 
         match memory_config.r#type.as_ref() {
             "messages" => Ok(Memory::MESSAGES(Messages::new())),
+            "general" => Ok(Memory::GENERAL(General::new(&self.config, memory_config).await)),
             _ => panic!(),
         }
     }

@@ -1,11 +1,17 @@
 use crate::llm::prompt::PromptMessage;
-use crate::memory::memory::{InitialiseMemory, MemoryBlock, MemoryContext, RecordMemory, RetrieveMemory};
+use crate::memory::memory::{InitialiseMemory, MemoryBlock, MemoryConfiguration, MemoryContext, RecordMemory, RetrieveMemory};
 use crate::memory::repository::semantic_repository::{SemanticCommand, SemanticMemoryConfiguration, SemanticQuery, SemanticRepository, SemanticRepositoryFactory};
 use crate::memory::repository::working_repository::{WorkingMemoryCommand, WorkingMemoryConfiguration, WorkingMemoryQuery, WorkingMemoryRepository, WorkingMemoryRepositoryFactory};
 use agentsmith_common::config::config::Config;
 use agentsmith_common::error::error::SystemResult;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GeneralMemoryConfiguration {
+    pub working: WorkingMemoryConfiguration,
+    pub semantic: SemanticMemoryConfiguration,
+}
 
 #[derive(Clone)]
 pub struct General {
@@ -16,20 +22,21 @@ pub struct General {
 impl General {
 
     pub async fn new(config: &Config,
-                     working_memory_configuration: &WorkingMemoryConfiguration,
-                     semantic_repository_configuration: &SemanticMemoryConfiguration) -> Self {
+                     memory_configuration: &MemoryConfiguration) -> Self {
 
         let working_factory = WorkingMemoryRepositoryFactory::new(config);
         let semantic_factory = SemanticRepositoryFactory::new(config);
 
+        let general_configuration = memory_configuration.general.clone().expect("No general configuration found.");
+
         let working = working_factory.instance(
-            working_memory_configuration
+            &general_configuration.working,
         )
             .await
             .unwrap();
 
         let semantic = semantic_factory.instance(
-            semantic_repository_configuration
+            &general_configuration.semantic,
         )
             .await
             .unwrap();

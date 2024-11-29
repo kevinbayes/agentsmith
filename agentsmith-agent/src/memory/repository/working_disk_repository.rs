@@ -60,18 +60,14 @@ impl WorkingMemoryDiskRepository {
 
         let file_path = Path::new(file_path_str.as_str());
 
-        if !file_path.exists() {
-            File::create(file_path)
-                .map_err(|e| {
-                    println!("Error creating file {}.", e);
-                    SystemError::MemoryError { code: 2008, id: 1 }
-                })?;
-        }
-
-        let file = File::open(file_path).map_err(|e| {
-            debug!("Error opening file for reading: {}", e);
-            SystemError::MemoryError { code: 2007, id: 1 }
-        })?;
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .open(file_path)
+            .map_err(|e| {
+                println!("Error creating file {}.", e);
+                SystemError::MemoryError { code: 2008, id: 1 }
+            })?;
 
         Ok(file)
     }

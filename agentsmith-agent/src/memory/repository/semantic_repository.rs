@@ -12,20 +12,20 @@ pub enum SemanticRepository {
     Arango(SemanticArangoRepository),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SemanticMemoryConfiguration {
     pub id: String,
-    r#type: String,
+    pub r#type: String,
     pub disk: Option<SemanticDiskRepositoryConfiguration>,
     pub arango: Option<SemanticArangoRepositoryConfiguration>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SemanticDiskRepositoryConfiguration {
     pub path: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SemanticArangoRepositoryConfiguration {
     pub connection: ArangoConfig,
     pub index: QdrantConfig,
@@ -47,7 +47,12 @@ impl SemanticRepositoryFactory {
     pub async fn instance(&self, semantic_memory_configuration: &SemanticMemoryConfiguration) -> SystemResult<SemanticRepository> {
         let memory_type: &str = semantic_memory_configuration.r#type.as_str();
         match memory_type {
-            // TODO: Create a disk or arango repository.
+            "disk" => {
+                Ok(SemanticRepository::Disk(SemanticDiskRepository::new(semantic_memory_configuration).await?))
+            }
+            "arango" => {
+                Ok(SemanticRepository::Arango(SemanticArangoRepository::new(semantic_memory_configuration).await?))
+            }
             _ => panic!(),
         }
     }

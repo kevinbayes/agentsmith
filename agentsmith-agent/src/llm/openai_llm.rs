@@ -1,8 +1,9 @@
+use std::io::Write;
 use crate::llm::llm::{GenerateText, LLMConfiguration, LLMResult};
 use agentsmith_common::config::config::{Config, GatewayConfig};
 use agentsmith_common::error::error::{SystemError, SystemResult};
 use chrono::Local;
-use futures_util::TryFutureExt;
+use futures_util::{StreamExt, TryFutureExt};
 use reqwest::{Proxy, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -75,7 +76,7 @@ impl OpenAIRequest {
                         name: None,
                     }],
                     temperature: config.temperature.clone().unwrap_or(1.0),
-                    max_tokens: config.max_tokens.clone().unwrap_or(500),
+                    max_tokens: config.max_tokens.clone().unwrap_or(1000),
                     seed: config.seed.clone().unwrap_or(0),
                     top_p: config.top_p.clone().unwrap_or(1),
                     tool_choice: tool_choice,
@@ -411,6 +412,27 @@ impl Tool {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct OpenAIChatChunkDelta {
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIChatChunkChoice {
+    delta: OpenAIChatChunkDelta,
+    index: usize,
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIChatCompletionChunk {
+    id: String,
+    object: String,
+    created: usize,
+    model: String,
+    choices: Vec<OpenAIChatChunkChoice>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct OpenAIGenerateResponse {
     pub id: Option<String>,
@@ -469,6 +491,81 @@ impl OpenAILLM {
 
         Self { global_config: openai_config, config: llm_config, client }
     }
+
+    async fn stream(&self, prompt: &Prompt) -> SystemResult<LLMResult> {
+
+        let global_config = self.global_config.clone();
+        let config = self.config.clone();
+
+        let url_str = format!("{}{}", config.base_url.clone().unwrap_or(global_config.baseurl), "/v1/chat/completions");
+        let api_key = config.credentials.api_key.clone();
+
+        let request_obj = OpenAIRequest::from_prompt(&config, prompt);
+
+        let client = self.client.lock().unwrap();
+
+        let request = client.post(&url_str)
+            .bearer_auth(&api_key)
+            .header("User-Agent", format!("AgentSmith Framework"))
+            .header("Content-Type", format!("application/json"))
+            .json(&request_obj)
+            .build()
+            .map_err(|e| {
+                println!("Error: {:?}", e);
+                SystemError::AgentError { id: 0, code: 2 }
+            })?;
+        info!("Request: {:?}", request);
+        info!("Request Body: {:?}", request_obj);
+
+        let res = client.execute(request)
+            .await
+            .map_err(|e| {
+                println!("Error: {:?}", e);
+                SystemError::AgentError { id: 0, code: 2 }
+            })?;
+
+        let mut stream = res.bytes_stream();
+        while let Some(item) = stream.next().await {
+            let item = item
+                .map_err(|e| {
+                    println!("Error: {:?}", e);
+                    SystemError::AgentError { id: 0, code: 2 }
+                })?;
+            let s = match std::str::from_utf8(&item) {
+                Ok(v) => v,
+                Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
+            };
+
+            for p in s.split("\n\n") {
+                match p.strip_prefix("data: ") {
+                    Some(p) => {
+                        // Check if the stream is done...
+                        if p == "[DONE]" {
+                            break;
+                        }
+
+                        // Parse the json data...
+                        let d = serde_json::from_str::<OpenAIChatCompletionChunk>(p)
+                            .expect(format!("Couldn't parse: {}", p).as_str());
+
+                        // Is there data?
+                        let c = d.choices.get(0).expect("No choice returned");
+                        if let Some(content) = &c.delta.content {
+                            print!("{}", content);
+                        }
+
+                        // Flush stdout as it goes...
+                        if let Err(error) = std::io::stdout().flush() {
+                            panic!("{}", error);
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
+
+        todo!()
+    }
 }
 
 impl GenerateText for OpenAILLM {
@@ -513,6 +610,8 @@ impl GenerateText for OpenAILLM {
 
         Ok(LLMResult::from_openai(&res))
     }
+
+
 }
 
 

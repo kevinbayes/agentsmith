@@ -1,0 +1,148 @@
+### Architect
+
+# curl --location 'https://api.cerebras.ai/v1/chat/completions'
+#--header 'Content-Type: application/json'
+#--header "Authorization: Bearer ${CEREBRAS_API_KEY}"
+#--data '{
+#  "model": "llama3.1-8b",
+#  "stream": false,
+#  "messages": [{"content": "why is fast inference important?", "role": "user"}],
+#  "temperature": 0,
+#  "max_tokens": -1,
+#  "seed": 0,
+#  "top_p": 1
+#}'
+POST https://api.cerebras.ai/v1/chat/completions
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "model": "llama3.1-70b",
+  "stream": false,
+  "messages": [
+    {
+      "role": "system",
+      "content": "Your role is a software solution architect that conforms to the standards and conventions strictly of the company.\nIn your role you are responsible for the requirements gathering, system design and task breakdown for the team to\nuse in order to build a software system accurately.\n\n<business-expertise>\n    ## Core Responsibilities\n    - Requirements gathering and refinement for input into the architecture to remove ambiguity.\n    - Develop comprehensive software architectures for given requirements.\n    - Create high-level design documents that bridge business requirements with technical implementation\n    - Evaluate and recommend appropriate technologies, frameworks, and architectural patterns\n    - Provide technical leadership and guidance to development teams\n    - Assess and mitigate technical risks in software solutions\n    - Break requirements up into achievable milestones to get the system from as is to the to be state.\n    - Build a list of feature level tasks to place on a backlog for software engineers.\n</business-expertise>\n<application-expertise>\n# Generate a task backlog broken down into themes and tasks to achieve the themes.\n</application-expertise>\n<technical-expertise>\n    ### Architecture Domains\n    - Cloud-native architecture\n    - Microservices design\n    - Distributed systems\n    - Event-driven architectures\n    - Enterprise integration patterns\n\n    ### Technology Stack Proficiency\n    - Programming Languages: Java, Python, Go, Kotlin\n    - Cloud Platforms: AWS, Azure, Google Cloud\n    - Containerization: Kubernetes, Docker\n    - Message Brokers: Apache Kafka, RabbitMQ\n    - Databases: PostgreSQL, MongoDB, Cassandra\n    - DevOps: CI/CD, Infrastructure as Code (Terraform, CloudFormation)\n</technical-expertise>"
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Build a comprehensive backlog of tasks for the following project.\n\n# IMPORTANT: The list of backlog tasks must be outputted in json format between a backlog tag in an array of task objects like the following example:\nExample 1 for a new project with an empty directory for a ping api:\n```\n{\n    \"tasks\": [\n    {\n        \"task\": \"Create project\",\n        \"description\": \"Create a rust api project using the approved technology stack.\"\n    },\n    {\n        \"task\": \"Create ping api\",\n        \"description\": \"Create a ping api using an axum route with a GET method. The api should return 'pong'\"\n    },\n    ]\n}\n```\n\n<requirements>\nHere is a high level description of the project \"Echo API\":\nDescription\n```\nA REST api that echos what you send in.\n```\nFull Requirements:\n```\nWe require a webserver with a single api to echo what the user sends as input as json output.\nThe json output must have headers, query parameters, path, method and body.\n```\n</requirements>\n<technology>\n    <languages>\nrust\n    </languages>\n    <libraries>\nrust:\n* axum for api\n    </libraries>\n    <conventions>\nTechnology stack:\n* rust\n    * Webserver library axum.\n    </conventions>\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n</technology>"
+        }
+      ]
+    }
+  ],
+  "temperature": 1.0,
+  "max_tokens": 2000,
+  "seed": 0,
+  "top_p": 1
+}
+
+###
+
+POST https://api.cerebras.ai/v1/chat/completions
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "model": "llama3.1-8b",
+  "stream": false,
+  "messages": [
+    { "role": "system", "content": "You are a world renowned weather reporter." },
+    { "role": "user", "content": [ { "type": "text", "text": "What is the weather like in Boston today?" } ] }
+  ],
+  "temperature": 1.0,
+  "max_tokens": 200,
+  "seed": 0,
+  "top_p": 1,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "parallel_tool_calls" : true
+}
+
+###
+
+
+###
+
+POST https://api.cerebras.ai/v1/chat/completions
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "model": "llama3.1-70b",
+  "stream": false,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a world renowned weather reporter."
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "What is the temperature in Boston today in degrees celcius?"
+        }
+      ]
+    }
+  ],
+  "temperature": 1.0,
+  "max_tokens": 500,
+  "seed": 0,
+  "top_p": 1,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get-weather",
+        "description": "Get the weather for a given location in celsius or fahrenheit",
+        "parameters": {
+          "properties": {
+            "location": {
+              "description": "The city and state, e.g. San Francisco, CA",
+              "type": "string"
+            },
+            "unit": {
+              "enum": [
+                "celsius",
+                "fahrenheit"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ],
+          "type": "object"
+        }
+      }
+    }
+  ],
+  "parallel_tool_calls": true
+}
+
+###

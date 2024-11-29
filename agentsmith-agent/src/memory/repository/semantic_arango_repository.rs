@@ -22,9 +22,9 @@ impl SemanticArangoRepository {
     const COLLECTION_NAME: &'static str = "semantic-memory";
     const INDEX_NAME: &'static str = "semantic-memory";
 
-    pub async fn new(config: WorkingMemoryConfiguration) -> SystemResult<Self> {
+    pub async fn new(config: &SemanticMemoryConfiguration) -> SystemResult<Self> {
 
-        let arango_config = config.arango.unwrap();
+        let arango_config = config.arango.clone().unwrap();
 
         let qdrant_config = arango_config.index.clone();
         let index = Qdrant::from_url(qdrant_config.host.as_str())

@@ -78,6 +78,12 @@ pub enum PromptMessage {
 
 impl PromptMessage {
 
+
+    pub fn for_user_simple_text(name: Option<String>, text: &str) -> Self {
+
+        PromptMessage::User { role: "user".to_string(), content: vec![UserContent::Text { type_: "text".to_string(), text: text.to_string() }], name }
+    }
+
     pub fn from_assistant_message(llm_result: &LLMResult) -> Self {
 
         let tool_calls = llm_result.tool_calls.clone();

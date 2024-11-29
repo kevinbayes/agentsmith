@@ -13,20 +13,20 @@ pub enum WorkingMemoryRepository {
     Arango(WorkingMemoryArangoRepository),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkingMemoryConfiguration {
     pub id: String,
-    pub(crate) r#type: String,
+    pub r#type: String,
     pub disk: Option<WorkingMemoryDiskRepositoryConfiguration>,
     pub arango: Option<WorkingMemoryArangoRepositoryConfiguration>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkingMemoryDiskRepositoryConfiguration {
     pub path: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkingMemoryArangoRepositoryConfiguration {
     pub connection: ArangoConfig,
     pub index: QdrantConfig,

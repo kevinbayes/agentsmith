@@ -36,6 +36,13 @@ Content-Type: application/json
   "top_p": 1.0,
   "stream": false
 }
+###
+POST https://api.anthropic.com/v1/messages
+x-api-key: {{anthropic_token}}
+anthropic-version: 2023-06-01
+Content-Type: application/json
+
+< conflict.prompt.json
 
 ###
 

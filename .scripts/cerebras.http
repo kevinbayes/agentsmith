@@ -16,6 +16,14 @@ POST https://api.cerebras.ai/v1/chat/completions
 Authorization: Bearer {{token}}
 Content-Type: application/json
 
+< input.conflict.txt
+
+###
+#}'
+POST https://api.cerebras.ai/v1/chat/completions
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
 {
   "model": "llama3.1-8b",
   "stream": false,
@@ -25,7 +33,7 @@ Content-Type: application/json
       "role": "system"
     },
     {
-      "content": "why is fast inference important?",
+      "content": "",
       "role": "user"
     }
   ],

@@ -18,3 +18,4 @@ target/
 /agentsmith-agent/secret-llm-config.json
 /agentsmith-runtime/config.json
 /*.snap
+/.scripts/*.prompt.json

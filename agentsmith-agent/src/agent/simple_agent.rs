@@ -23,7 +23,7 @@ impl SimpleAgent {
                         description: agent_config.description.clone(),
                         tenant: "".to_string(),
                         config: agent_config.clone(),
-                        llm: llm,
+                        llm: Arc::new(llm),
                         toolbox: Arc::new(agent_config.toolbox.clone()),
                         memory: Arc::new(memory),
                     }

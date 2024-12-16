@@ -111,7 +111,7 @@ pub struct AgentExecutionResult {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentState {
-    Ready, Working, Done
+    Ready, Working, Completing, Done
 }
 
 

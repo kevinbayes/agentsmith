@@ -8,7 +8,7 @@ use futures_util::TryFutureExt;
 use reqwest::{Proxy, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::time::Duration;
 use tracing::info;
 use tracing_subscriber;
@@ -17,7 +17,7 @@ use tracing_subscriber;
 pub struct GroqLLM {
     global_config: GatewayConfig,
     config: LLMConfiguration,
-    client: Arc<Mutex<reqwest::Client>>,
+    client: Arc<reqwest::Client>,
 }
 
 impl GroqLLM {
@@ -29,10 +29,10 @@ impl GroqLLM {
             .unwrap()
             .clone();
 
-        let client = Arc::new(Mutex::new(reqwest::ClientBuilder::new()
+        let client = Arc::new(reqwest::ClientBuilder::new()
             .connect_timeout(Duration::from_secs(60))
             .build()
-            .unwrap()));
+            .unwrap());
 
         Self { global_config: groq_config, config: llm_configuration, client }
     }
@@ -52,7 +52,7 @@ impl GenerateText for GroqLLM {
 
         let request_obj = OpenAIRequest::from_prompt(&config, prompt);
 
-        let client = self.client.lock().unwrap();
+        let client = self.client.clone();
 
         let request =  client.post(&url_str)
             .bearer_auth(&api_key)

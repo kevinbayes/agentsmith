@@ -9,6 +9,7 @@ pub enum SystemError {
     NotImplemented,
     LoginFail,
     JwksError,
+    ParsingError { id: u8, code: u16 },
 
     EmbeddingError { id: u8, code: u16 },
 

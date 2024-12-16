@@ -26,7 +26,7 @@ pub struct AgentAttributes {
     pub description: String,
     pub tenant: String,
     pub config: AgentConfig,
-    pub llm: LLM,
+    pub llm: Arc<LLM>,
     pub memory: Arc<Memory>,
     pub toolbox: Arc<Vec<AgentTool>>
 }
@@ -46,8 +46,6 @@ impl Agent {
             Agent::HumanAgent(agent) => agent.id.clone(),
         }
     }
-
-
 
     pub fn name(&self) -> String {
         match self {

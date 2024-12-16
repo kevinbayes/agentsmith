@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::time::Duration;
 use futures_util::TryFutureExt;
 use reqwest::{Proxy, Url};
@@ -17,7 +17,7 @@ use crate::llm::prompt::Prompt;
 pub struct CerebrasLLM {
     global_config: GatewayConfig,
     config: LLMConfiguration,
-    client: Arc<Mutex<reqwest::Client>>,
+    client: Arc<reqwest::Client>,
 }
 
 impl CerebrasLLM {
@@ -29,10 +29,10 @@ impl CerebrasLLM {
             .unwrap()
             .clone();
 
-        let client = Arc::new(Mutex::new(reqwest::ClientBuilder::new()
+        let client = Arc::new(reqwest::ClientBuilder::new()
             .connect_timeout(Duration::from_secs(60))
             .build()
-            .unwrap()));
+            .unwrap());
 
         Self { global_config: cerebras_config, config: llm_configuration, client }
     }
@@ -52,7 +52,7 @@ impl GenerateText for CerebrasLLM {
 
         let request_obj = OpenAIRequest::from_prompt(&config, prompt);
 
-        let client = self.client.lock().unwrap();
+        let client = self.client.clone();
 
         let request =  client.post(&url_str)
             .bearer_auth(&api_key)

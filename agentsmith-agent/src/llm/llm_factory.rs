@@ -34,7 +34,6 @@ pub trait LLMClient {
 
 impl LLMClient for LLM {
     async fn execute(&self, prompt: &Prompt) -> agentsmith_common::error::error::SystemResult<LLMResult> {
-        info!("Test");
         match self {
             LLM::AnthropicLLM(llm) => llm.generate(prompt).await,
             LLM::CerebrasLLM(llm) => llm.generate(prompt).await,
@@ -79,8 +78,6 @@ impl LLMRegistry {
 impl LLMFactory {
 
     pub fn new(config: Config) ->  Self {
-
-
 
         Self {
             config: config.clone(),

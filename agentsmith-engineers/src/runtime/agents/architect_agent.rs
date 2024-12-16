@@ -1,20 +1,22 @@
 use std::cmp::PartialEq;
 use crate::config::config::SweConfig;
-use crate::helper::template::build_template_environment;
 use crate::runtime::agents::agent::{build_agent_config, build_prompt_string, AgentExecution, AgentExecutionResult, AgentState};
-use crate::runtime::local::SoftwareProject;
+use crate::runtime::local::{ProjectTask, SoftwareProject};
 use agentsmith_agent::agent::agent::Agent;
 use agentsmith_agent::agent::agent_factory::AgentFactory;
-use agentsmith_common::error::error::SystemResult;
+use agentsmith_common::error::error::{SystemError, SystemResult};
 use minijinja::context;
 use uuid::Uuid;
 use agentsmith_agent::llm::llm::LLMResult;
 use agentsmith_agent::llm::prompt::{Prompt, PromptMessage, UserContent};
 use agentsmith_common::disk::file_writer_util::write_to_disk;
+use regex::{Regex, RegexBuilder};
+use serde_json::Value;
+use crate::helper::command_line::get_user_input;
 
 #[derive(Clone, Debug)]
 enum ArchitectAgentState {
-    Ready, Thinking, Reviewing, Done
+    Ready, Reflection, Reviewing, Packaging, Done
 }
 
 #[derive(Clone)]
@@ -53,6 +55,79 @@ impl ArchitectAgent {
 
         Ok(true)
     }
+
+    fn ask_user_to_review(&self, message: &str) -> String {
+        let question = format!("'{}'. Select (1) Accept (2) Try again (3) Abort.", message);
+        let user_input = get_user_input(question.as_str());
+        match user_input.as_str() {
+            "1" | "2" | "3" => user_input,
+            _ => {
+                println!("Not a valid input please try again...");
+                self.ask_user_to_review(message)
+            }
+        }
+    }
+}
+
+fn extract_tasks_from_document(document: &str) -> SystemResult<Vec<ProjectTask>> {
+    // Regex to find JSON block within ```json or <backlog> tags
+    let json_regex = RegexBuilder::new(r"(?:<backlog>\n```|<backlog>\n```json|```json)(.*?)+(?:```\n</backlog>|```)").dot_matches_new_line(true).build()
+        .map_err(|e| {
+            println!("Error with regex: {}", e);
+            SystemError::ParsingError { id: 2, code: 3000 }
+        })?;
+
+    // Find the first match
+    let json_str = json_regex
+        .captures(document)
+        .and_then(|cap| cap.get(1))
+        .map(|m| m.as_str().trim())
+        .map(|s| {
+            let first_index = s.find('{').unwrap_or(0);
+            let last_index = s.rfind('}').map(|c| c+1).unwrap_or(s.len());
+            &s[first_index..last_index]
+        })
+        .ok_or("No JSON block found")
+        .map_err(|e| {
+            println!("Error with regex: {}", e);
+            SystemError::ParsingError { id: 2, code: 3001 }
+        })?;
+
+    println!("Looking at json {}.", json_str);
+
+    // Parse the JSON
+    let json_value: Value = serde_json::from_str(json_str)
+        .map_err(|e| {
+            println!("Error with regex: {}", e);
+            SystemError::ParsingError { id: 2, code: 3002 }
+        })?;
+
+    // Extract the tasks array
+    let tasks_array = json_value
+        .get("tasks")
+        .and_then(|v| v.as_array())
+        .ok_or("Could not find tasks array")
+        .map_err(|e| {
+            println!("Error with regex: {}", e);
+            SystemError::ParsingError { id: 2, code: 3003 }
+        })?;
+
+    // Map the tasks to ProjectTask structs
+    let tasks: Vec<ProjectTask> = tasks_array
+        .iter()
+        .map(|task| ProjectTask {
+            name: task.get("task")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            description: task.get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        })
+        .collect();
+
+    Ok(tasks)
 }
 
 impl AgentExecution for ArchitectAgent {
@@ -65,8 +140,8 @@ impl AgentExecution for ArchitectAgent {
 
             match self.state {
                 AgentState::Ready => {
-                    let system_template_name = format!("{}/{:?}.system.prompt.jinja", Self::ROLE, self.state).to_lowercase();
-                    let user_template_name = format!("{}/{:?}.user.prompt.jinja", Self::ROLE, self.state).to_lowercase();
+                    let system_template_name = format!("{}/{:?}.system.prompt.jinja", Self::ROLE, self.internal_state).to_lowercase();
+                    let user_template_name = format!("{}/{:?}.user.prompt.jinja", Self::ROLE, self.internal_state).to_lowercase();
 
                     let context = context! {
                         project => &project,
@@ -79,7 +154,7 @@ impl AgentExecution for ArchitectAgent {
 
                     let result = self.agent.chat_completion(&prompt).await?;
 
-                    let output_checkpoint = format!("./{}.{:?}.md", Self::ROLE, self.state).to_lowercase();
+                    let output_checkpoint = format!("./{}.{:?}.md", Self::ROLE, self.internal_state).to_lowercase();
 
                     write_to_disk(output_checkpoint.as_str(), result.message.as_str()).expect("TODO: panic message");
 
@@ -88,32 +163,82 @@ impl AgentExecution for ArchitectAgent {
                     latest_response = result.message.clone();
 
                     self.state = AgentState::Working;
-                    self.internal_state = ArchitectAgentState::Reviewing;
+                    self.internal_state = ArchitectAgentState::Reflection;
                 }
                 AgentState::Working => {
 
-                    let system_template_name = format!("{}/{:?}.system.prompt.jinja", Self::ROLE, self.state).to_lowercase();
-                    let user_template_name = format!("{}/{:?}.user.prompt.jinja", Self::ROLE, self.state).to_lowercase();
+                    let template_names = match self.internal_state {
+                        ArchitectAgentState::Reflection | ArchitectAgentState::Reviewing => {
 
-                    let context = context! {
-                        project => &project,
-                        latest_response => latest_response,
+                            let system_template_name = format!("{}/{:?}.system.prompt.jinja", Self::ROLE, self.internal_state).to_lowercase();
+                            let user_template_name = format!("{}/{:?}.user.prompt.jinja", Self::ROLE, self.internal_state).to_lowercase();
+
+                            (system_template_name, user_template_name)
+                        }
+                        _ => (String::new(), String::new())
                     };
 
-                    let system_string = build_prompt_string(&self.prompt_path, &system_template_name, &context);
-                    let user_string = build_prompt_string(&self.prompt_path, &user_template_name, &context);
 
-                    let prompt = Prompt::new_simple(system_string, user_string,);
+                    let system_template_name = template_names.0;
+                    let user_template_name = template_names.1;
 
-                    let result = self.agent.chat_completion(&prompt).await?;
+                    if system_template_name.is_empty() {
 
-                    let output_checkpoint = format!("./{}.{:?}.md", Self::ROLE, self.state).to_lowercase();
+                        self.state = AgentState::Done;
+                        self.internal_state = ArchitectAgentState::Done;
+                    } else {
 
-                    write_to_disk(output_checkpoint.as_str(), result.message.as_str()).expect("TODO: panic message");
+                        let context = context! {
+                        project => &project,
+                            latest_response => latest_response,
+                        };
 
-                    println!("{:?}", result);
+                        let system_string = build_prompt_string(&self.prompt_path, &system_template_name, &context);
+                        let user_string = build_prompt_string(&self.prompt_path, &user_template_name, &context);
 
-                    latest_response = result.message.clone();
+                        let prompt = Prompt::new_simple(system_string, user_string,);
+
+                        let result = self.agent.chat_completion(&prompt).await?;
+
+                        let output_checkpoint = format!("./{}.{:?}.md", Self::ROLE, self.state).to_lowercase();
+
+                        write_to_disk(output_checkpoint.as_str(), result.message.as_str()).expect("TODO: panic message");
+
+                        println!("{:?}", result);
+
+                        latest_response = result.message.clone();
+
+                        match self.internal_state {
+                            ArchitectAgentState::Reflection => {
+
+                                self.state = AgentState::Working;
+                                self.internal_state = ArchitectAgentState::Reviewing;
+                            }
+                            _ => {
+                                let question = format!("Please review '{}'.", output_checkpoint);
+                                let user_input = self.ask_user_to_review(question.as_str());
+                                match user_input.as_str() {
+                                    "1" => {
+                                        self.state = AgentState::Completing;
+                                        self.internal_state = ArchitectAgentState::Packaging;
+                                    },
+                                    "2" => {
+                                        self.state = AgentState::Working;
+                                        self.internal_state = ArchitectAgentState::Reviewing;
+                                    },
+                                    _ => {
+                                        self.state = AgentState::Done;
+                                        self.internal_state = ArchitectAgentState::Done;
+                                    },
+                                };
+                            }
+                        }
+                    }
+                }
+                AgentState::Completing => {
+
+
+
 
                     self.state = AgentState::Done;
                     self.internal_state = ArchitectAgentState::Done;
@@ -133,10 +258,33 @@ impl AgentExecution for ArchitectAgent {
 mod tests {
     use crate::config::config::read_swe_config;
     use crate::runtime::agents::agent::AgentExecution;
-    use crate::runtime::agents::architect_agent::ArchitectAgent;
+    use crate::runtime::agents::architect_agent::{extract_tasks_from_document, ArchitectAgent};
     use crate::runtime::local::{SoftwareConventions, SoftwareProject, SoftwareSourceCode};
     use agentsmith_agent::agent::agent_factory::AgentFactory;
     use agentsmith_common::config::config::Config;
+    use crate::helper::file_helper::read_string_file;
+
+    #[tokio::test]
+    async fn test_parsing_output_to_tasks_1() {
+
+        let string = read_string_file("./resources/test/runtime/agents/architect.output.1.md").unwrap();
+
+        let tasks = extract_tasks_from_document(&string).unwrap();
+
+        assert_eq!(24, tasks.len());
+
+    }
+
+    #[tokio::test]
+    async fn test_parsing_output_to_tasks_2() {
+
+        let string = read_string_file("./resources/test/runtime/agents/architect.output.2.md").unwrap();
+
+        let tasks = extract_tasks_from_document(&string).unwrap();
+
+        assert_eq!(10, tasks.len());
+
+    }
 
     #[tokio::test]
     async fn test_architect_agent() {

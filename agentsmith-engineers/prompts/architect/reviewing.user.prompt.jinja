@@ -1,0 +1,29 @@
+Review the tasks created and ensure they cover everything. Also summarise the tasks in a use case diagram with a use case description.
+
+# IMPORTANT: The summary and use case must be surrounded by a use-case tag as seen in the example below:
+# IMPORTANT: The list of backlog tasks must be outputted in json format between a backlog tag in an array of task objects like the following example:
+Example 1 for a new project with an empty directory for a ping api:
+<backlog>
+    ```
+    {
+    "tasks": [
+    {
+    "task": "Create project",
+    "description": "Create a rust api project using the approved technology stack."
+    },
+    {
+    "task": "Create ping api",
+    "description": "Create a ping api using an axum route with a GET method. The api should return 'pong'"
+    },
+    ]
+    }
+    ```
+</backlog>
+<use-case>
+    This project is a web server that has a single endpoint /ping that returns a response pong.
+</use-case>
+{% include "common/project_details.prompt.jinja" %}
+
+<current-tasks>
+    {{ latest_response }}
+</current-tasks>

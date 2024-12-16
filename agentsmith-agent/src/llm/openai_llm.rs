@@ -7,7 +7,7 @@ use futures_util::{StreamExt, TryFutureExt};
 use reqwest::{Proxy, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::time::Duration;
 use r2d2_redis::redis::Commands;
 use tracing::info;
@@ -18,7 +18,7 @@ use crate::llm::prompt::{Prompt, PromptMessage, UserContent as PromptUserContent
 pub struct OpenAILLM {
     global_config: GatewayConfig,
     config: LLMConfiguration,
-    client: Arc<Mutex<reqwest::Client>>,
+    client: Arc<reqwest::Client>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -484,10 +484,10 @@ impl OpenAILLM {
             .unwrap()
             .clone();
 
-        let client = Arc::new(Mutex::new(reqwest::ClientBuilder::new()
+        let client = Arc::new(reqwest::ClientBuilder::new()
             .connect_timeout(Duration::from_secs(60))
             .build()
-            .unwrap()));
+            .unwrap());
 
         Self { global_config: openai_config, config: llm_config, client }
     }
@@ -502,7 +502,7 @@ impl OpenAILLM {
 
         let request_obj = OpenAIRequest::from_prompt(&config, prompt);
 
-        let client = self.client.lock().unwrap();
+        let client = self.client.clone();
 
         let request = client.post(&url_str)
             .bearer_auth(&api_key)
@@ -580,7 +580,7 @@ impl GenerateText for OpenAILLM {
 
         let request_obj = OpenAIRequest::from_prompt(&config, prompt);
 
-        let client = self.client.lock().unwrap();
+        let client = self.client.clone();
 
         let request = client.post(&url_str)
             .bearer_auth(&api_key)

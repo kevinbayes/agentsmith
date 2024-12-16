@@ -7,7 +7,7 @@ pub fn get_user_input(question: &str) -> String {
     let mut stdout: Stdout = stdout();
 
     stdout.execute(SetForegroundColor(Color::Blue)).unwrap();
-    println!("");
+    println!("-------------");
     println!("{}", question);
 
     stdout.execute(ResetColor).unwrap();

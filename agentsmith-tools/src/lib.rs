@@ -1,8 +1,8 @@
 //! Tool trait, process registry, and builtin tools.
 //!
-//! File tools canonicalize the requested path and refuse anything that still
-//! sits outside the run workdir after `..` and symlinks are resolved. `shell`
-//! is not jailed: confinement is the operator's sandbox around the process.
+//! File tools open from a workdir directory fd (`openat2` + `RESOLVE_BENEATH`)
+//! and refuse a path that resolves outside that directory. `shell` is not
+//! jailed: confinement is the operator's sandbox around the process.
 
 mod builtin;
 mod registry;

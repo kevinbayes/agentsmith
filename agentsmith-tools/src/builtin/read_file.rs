@@ -1,7 +1,6 @@
-use std::fs::OpenOptions;
+use std::fs::File;
 use std::io::Read;
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
+use std::os::fd::AsRawFd;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -9,8 +8,8 @@ use serde_json::{json, Value};
 use agentsmith_core::Error;
 
 use super::{
-    cap_output, clamp_output_bytes, clamp_read_bytes, join_blocking, open_error,
-    resolve_under_workdir, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_MAX_READ_BYTES,
+    cap_output, clamp_output_bytes, fstat_fd, join_blocking, open_error, WorkDirFd,
+    DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_MAX_READ_BYTES, MAX_READ_BYTES_CEILING,
 };
 use crate::tool::{ensure_not_cancelled, tool_error, Tool, ToolCtx, ToolDefinition, ToolOutput};
 use agentsmith_core::ToolErrorKind;
@@ -35,7 +34,7 @@ impl ReadFile {
     /// Tests pass a small cap; values above the ceiling are not honored.
     pub fn new(max_read_bytes: u64, max_output_bytes: u64) -> Self {
         Self {
-            max_read_bytes: clamp_read_bytes(max_read_bytes),
+            max_read_bytes: max_read_bytes.min(MAX_READ_BYTES_CEILING),
             max_output_bytes: clamp_output_bytes(max_output_bytes),
         }
     }
@@ -72,13 +71,16 @@ impl Tool for ReadFile {
     async fn call(&self, ctx: ToolCtx, arguments: Value) -> Result<ToolOutput, Error> {
         ensure_not_cancelled(NAME, &ctx)?;
         let args: Args = super::parse_args(NAME, arguments)?;
-        let path = resolve_under_workdir(NAME, &ctx.workdir, &args.path, false)?;
         ensure_not_cancelled(NAME, &ctx)?;
+        let workdir = ctx.workdir.clone();
+        let requested = args.path;
         let max_read = self.max_read_bytes;
         let max_output = self.max_output_bytes;
+        // Open and read inside one blocking task so nothing awaits between
+        // the directory-fd walk and the read.
         let (text, truncated) = join_blocking(
             NAME,
-            tokio::task::spawn_blocking(move || read_limited(&path, max_read)),
+            tokio::task::spawn_blocking(move || read_limited(&workdir, &requested, max_read)),
         )
         .await?;
         Ok(ToolOutput {
@@ -87,26 +89,56 @@ impl Tool for ReadFile {
     }
 }
 
-fn read_limited(path: &Path, max_read: u64) -> Result<(String, bool), Error> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|err| open_error(NAME, err))?;
-    let meta = file
-        .metadata()
+fn read_limited(
+    workdir: &std::path::Path,
+    requested: &str,
+    max_read: u64,
+) -> Result<(String, bool), Error> {
+    let root = WorkDirFd::open(NAME, workdir)?;
+    let relative = root.relative(NAME, requested)?;
+    let fd = root
+        .open_relative(
+            &relative,
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NONBLOCK,
+        )
+        .map_err(|err| {
+            if err.raw_os_error() == Some(libc::ENXIO) {
+                return tool_error(NAME, ToolErrorKind::Execution, "not a regular file");
+            }
+            open_error(NAME, requested, err)
+        })?;
+    let st = fstat_fd(fd.as_raw_fd())
         .map_err(|err| tool_error(NAME, ToolErrorKind::Execution, format!("path: {err}")))?;
-    if !meta.is_file() {
+    if st.st_mode & libc::S_IFMT != libc::S_IFREG {
         return Err(tool_error(
             NAME,
             ToolErrorKind::Execution,
             "not a regular file",
         ));
     }
-    let cap = clamp_read_bytes(max_read);
+    // A FIFO would have failed the type check. Regular-file reads do not need
+    // the nonblocking flag that kept `open` from waiting on a pipe.
+    let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(tool_error(
+            NAME,
+            ToolErrorKind::Execution,
+            format!("path: {err}"),
+        ));
+    }
+    if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(tool_error(
+            NAME,
+            ToolErrorKind::Execution,
+            format!("path: {err}"),
+        ));
+    }
+    let mut file = File::from(fd);
     let mut buf = Vec::new();
     (&mut file)
-        .take(cap)
+        .take(max_read)
         .read_to_end(&mut buf)
         .map_err(|err| tool_error(NAME, ToolErrorKind::Execution, format!("read: {err}")))?;
     let mut probe = [0u8; 1];

@@ -1,5 +1,5 @@
 use std::process::ExitStatus;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -104,8 +104,25 @@ struct KillGroup {
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        if self.armed {
-            signal_group(self.pid, libc::SIGKILL);
+        if !self.armed {
+            return;
+        }
+        self.armed = false;
+        // The call future is gone. SIGKILL the group, then reap the leader so
+        // it does not stay a zombie. Children in the group get the same signal.
+        let _ = killpg_raw(self.pid, libc::SIGKILL);
+        let Ok(pid) = i32::try_from(self.pid) else {
+            return;
+        };
+        if pid <= 0 {
+            return;
+        }
+        for _ in 0..50 {
+            let rc = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
+            if rc == pid || rc < 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
@@ -154,6 +171,8 @@ impl Tool for Shell {
         let pid = child
             .id()
             .ok_or_else(|| tool_error(NAME, ToolErrorKind::Execution, "shell child has no pid"))?;
+        // Declared after `child` so this guard drops first and signals the
+        // group before the Child handle is dropped.
         let mut guard = KillGroup { pid, armed: true };
         let stdout = child
             .stdout
@@ -177,13 +196,30 @@ impl Tool for Shell {
             _ = tokio::time::sleep(timeout) => WaitOutcome::TimedOut,
         };
 
-        if !matches!(outcome, WaitOutcome::Finished(_)) {
-            stop_group(&mut child, pid).await;
-        }
-        guard.armed = false;
+        // `sh -c 'sleep 30 &'` exits while the grandchild is still in the
+        // group. Signal on every outcome, and keep the guard armed through
+        // output collection so a drop there still SIGKILLs.
+        let leader_reaped = matches!(outcome, WaitOutcome::Finished(_));
+        let stopped = ensure_group_dead(&mut child, pid, leader_reaped).await;
 
         let stdout = collect(stdout_task).await;
         let stderr = collect(stderr_task).await;
+        if group_alive(pid) {
+            let _ = signal_group(pid, libc::SIGKILL);
+            wait_until_group_gone(pid, Duration::from_millis(500)).await;
+        }
+        if group_alive(pid) {
+            return Err(match stopped {
+                Err(err) => err,
+                Ok(()) => tool_error(
+                    NAME,
+                    ToolErrorKind::Execution,
+                    "failed to kill process group",
+                ),
+            });
+        }
+        guard.armed = false;
+
         let combined = combine(&stdout, &stderr);
         let capped = cap_output(&combined, self.max_output_bytes, false);
 
@@ -227,50 +263,106 @@ impl Tool for Shell {
     }
 }
 
+enum KillPg {
+    Sent,
+    Gone,
+    Failed(std::io::Error),
+}
+
 /// TERM the group, wait up to 2s, then KILL. The leader exiting is not enough:
-/// a grandchild may ignore TERM and keep the group alive.
-async fn stop_group(child: &mut Child, pid: u32) {
-    signal_group(pid, libc::SIGTERM);
-    let reaped = tokio::time::timeout(KILL_GRACE, child.wait()).await;
-    let leader_reaped = matches!(reaped, Ok(Ok(_)));
+/// `sh -c` background children stay in the group. A `killpg` that leaves the
+/// group alive is an execution error.
+async fn ensure_group_dead(
+    child: &mut Child,
+    pid: u32,
+    mut leader_reaped: bool,
+) -> Result<(), Error> {
+    let started = Instant::now();
+    let mut failure = signal_group(pid, libc::SIGTERM).err();
+    if !leader_reaped
+        && matches!(
+            tokio::time::timeout(KILL_GRACE, child.wait()).await,
+            Ok(Ok(_))
+        )
+    {
+        leader_reaped = true;
+    }
+    let elapsed = started.elapsed();
+    if elapsed < KILL_GRACE && (group_alive(pid) || !leader_reaped) {
+        wait_until_group_gone(pid, KILL_GRACE - elapsed).await;
+        if !leader_reaped && !group_alive(pid) {
+            leader_reaped = true;
+        }
+    }
     if !leader_reaped || group_alive(pid) {
-        signal_group(pid, libc::SIGKILL);
+        if let Err(err) = signal_group(pid, libc::SIGKILL) {
+            failure = Some(err);
+        }
         if !leader_reaped {
+            // Reap the leader so a zombie is not reported as a live group.
             let _ = tokio::time::timeout(KILL_GRACE, child.wait()).await;
         }
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
-        while group_alive(pid) && tokio::time::Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        wait_until_group_gone(pid, Duration::from_millis(500)).await;
+    }
+    if group_alive(pid) {
+        return Err(failure.unwrap_or_else(|| {
+            tool_error(
+                NAME,
+                ToolErrorKind::Execution,
+                "failed to kill process group",
+            )
+        }));
+    }
+    Ok(())
+}
+
+async fn wait_until_group_gone(pid: u32, grace: Duration) {
+    let deadline = Instant::now() + grace;
+    while group_alive(pid) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
-fn signal_group(pid: u32, sig: i32) {
-    let Ok(pgid) = i32::try_from(pid) else {
-        return;
-    };
-    if pgid <= 0 {
-        return;
+fn signal_group(pid: u32, sig: i32) -> Result<(), Error> {
+    match killpg_raw(pid, sig) {
+        KillPg::Sent | KillPg::Gone => Ok(()),
+        KillPg::Failed(err) => Err(tool_error(
+            NAME,
+            ToolErrorKind::Execution,
+            format!("killpg: {err}"),
+        )),
     }
-    // SAFETY: `pgid` is the process group of a child spawned with
-    // `process_group(0)`, so it is that child's pid and not 0 (which would
-    // signal the harness). `sig` is SIGTERM, SIGKILL, or checked by the caller.
-    let _ = unsafe { libc::killpg(pgid, sig) };
 }
 
 fn group_alive(pid: u32) -> bool {
+    match killpg_raw(pid, 0) {
+        KillPg::Sent => true,
+        KillPg::Gone => false,
+        // EPERM means the group exists and we cannot signal it.
+        KillPg::Failed(err) => err.raw_os_error() == Some(libc::EPERM),
+    }
+}
+
+fn killpg_raw(pid: u32, sig: i32) -> KillPg {
     let Ok(pgid) = i32::try_from(pid) else {
-        return false;
+        return KillPg::Failed(std::io::Error::other("invalid process group"));
     };
     if pgid <= 0 {
-        return false;
+        return KillPg::Failed(std::io::Error::other("invalid process group"));
     }
-    // SAFETY: signal 0 only probes the group; it does not deliver a signal.
-    let rc = unsafe { libc::killpg(pgid, 0) };
+    // SAFETY: `pgid` is the process group of a child spawned with
+    // `process_group(0)`, so it is that child's pid and not 0 (which would
+    // signal the harness). `sig` is SIGTERM, SIGKILL, or 0.
+    let rc = unsafe { libc::killpg(pgid, sig) };
     if rc == 0 {
-        return true;
+        return KillPg::Sent;
     }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::ESRCH) {
+        KillPg::Gone
+    } else {
+        KillPg::Failed(err)
+    }
 }
 
 async fn read_capped(mut reader: impl AsyncRead + Unpin, cap: usize) -> Vec<u8> {

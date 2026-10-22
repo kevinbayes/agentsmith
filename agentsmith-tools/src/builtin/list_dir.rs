@@ -1,6 +1,5 @@
-use std::fs::OpenOptions;
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
+use std::ffi::CStr;
+use std::os::fd::{AsRawFd, IntoRawFd};
 use std::path::Path;
 
 use serde::Deserialize;
@@ -9,7 +8,7 @@ use serde_json::{json, Value};
 use agentsmith_core::{Error, ToolErrorKind};
 
 use super::{
-    cap_output, clamp_output_bytes, join_blocking, open_error, resolve_under_workdir,
+    cap_output, clamp_output_bytes, fstat_fd, join_blocking, open_error, WorkDirFd,
     DEFAULT_MAX_OUTPUT_BYTES, MAX_DIR_ENTRIES,
 };
 use crate::tool::{ensure_not_cancelled, tool_error, Tool, ToolCtx, ToolDefinition, ToolOutput};
@@ -63,12 +62,13 @@ impl Tool for ListDir {
     async fn call(&self, ctx: ToolCtx, arguments: Value) -> Result<ToolOutput, Error> {
         ensure_not_cancelled(NAME, &ctx)?;
         let args: Args = super::parse_args(NAME, arguments)?;
-        let path = resolve_under_workdir(NAME, &ctx.workdir, &args.path, false)?;
         ensure_not_cancelled(NAME, &ctx)?;
+        let workdir = ctx.workdir.clone();
+        let requested = args.path;
         let max_output = self.max_output_bytes;
         let (body, truncated) = join_blocking(
             NAME,
-            tokio::task::spawn_blocking(move || list_limited(&path)),
+            tokio::task::spawn_blocking(move || list_limited(&workdir, &requested)),
         )
         .await?;
         Ok(ToolOutput {
@@ -77,46 +77,123 @@ impl Tool for ListDir {
     }
 }
 
-fn list_limited(path: &Path) -> Result<(String, bool), Error> {
-    // Hold the directory fd open and list through it. O_NOFOLLOW means a
-    // symlink swapped in after the jail check is not followed.
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|err| open_error(NAME, err))?;
-    let meta = file
-        .metadata()
+fn list_limited(workdir: &Path, requested: &str) -> Result<(String, bool), Error> {
+    let root = WorkDirFd::open(NAME, workdir)?;
+    let relative = root.relative(NAME, requested)?;
+    let fd = root
+        .open_relative(
+            &relative,
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NONBLOCK,
+        )
+        .map_err(|err| {
+            if matches!(err.raw_os_error(), Some(libc::ENOTDIR) | Some(libc::ENXIO)) {
+                return tool_error(NAME, ToolErrorKind::Execution, "not a directory");
+            }
+            open_error(NAME, requested, err)
+        })?;
+    let st = fstat_fd(fd.as_raw_fd())
         .map_err(|err| tool_error(NAME, ToolErrorKind::Execution, format!("path: {err}")))?;
-    if !meta.is_dir() {
+    if st.st_mode & libc::S_IFMT != libc::S_IFDIR {
         return Err(tool_error(
             NAME,
             ToolErrorKind::Execution,
             "not a directory",
         ));
     }
-    let proc_path = format!("/proc/self/fd/{}", file.as_raw_fd());
+
+    let raw = fd.into_raw_fd();
+    let dir = unsafe {
+        // SAFETY: `raw` is an open directory fd. On success, `fdopendir` owns it
+        // and `closedir` closes it. On failure the fd stays ours and we close it.
+        libc::fdopendir(raw)
+    };
+    if dir.is_null() {
+        unsafe { libc::close(raw) };
+        let err = std::io::Error::last_os_error();
+        return Err(tool_error(
+            NAME,
+            ToolErrorKind::Execution,
+            format!("list: {err}"),
+        ));
+    }
+    let _dir = DirClose(dir);
+
     let mut names = Vec::new();
-    for entry in std::fs::read_dir(&proc_path)
-        .map_err(|err| tool_error(NAME, ToolErrorKind::Execution, format!("list: {err}")))?
-    {
-        let entry = entry
-            .map_err(|err| tool_error(NAME, ToolErrorKind::Execution, format!("list: {err}")))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|err| tool_error(NAME, ToolErrorKind::Execution, format!("list: {err}")))?;
-        let mut name = entry.file_name().to_string_lossy().into_owned();
-        // `file_type` does not follow symlinks, so a link to a directory
-        // outside the jail is just a name.
-        if file_type.is_dir() {
-            name.push('/');
+    let mut truncated = false;
+    loop {
+        unsafe { *libc::__errno_location() = 0 };
+        let ent = unsafe { libc::readdir(dir) };
+        if ent.is_null() {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error().unwrap_or(0) != 0 {
+                return Err(tool_error(
+                    NAME,
+                    ToolErrorKind::Execution,
+                    format!("list: {err}"),
+                ));
+            }
+            break;
         }
-        names.push(name);
+        let dtype = unsafe { (*ent).d_type };
+        let name_ptr = unsafe { (*ent).d_name.as_ptr() };
+        let name = unsafe { CStr::from_ptr(name_ptr) }
+            .to_string_lossy()
+            .into_owned();
+        if name == "." || name == ".." {
+            continue;
+        }
+        // Keep at most MAX_DIR_ENTRIES names. The next entry proves the cap
+        // was exceeded; leave the rest of the directory unread.
+        if names.len() == MAX_DIR_ENTRIES {
+            truncated = true;
+            break;
+        }
+        let is_dir = if dtype == libc::DT_DIR {
+            true
+        } else if dtype == libc::DT_UNKNOWN {
+            // `d_type` is not filled on some filesystems. Stat the name through
+            // the directory fd and do not follow a symlink (a link to a
+            // directory must not gain the `/` suffix).
+            let dirfd = unsafe { libc::dirfd(dir) };
+            if dirfd < 0 {
+                let err = std::io::Error::last_os_error();
+                return Err(tool_error(
+                    NAME,
+                    ToolErrorKind::Execution,
+                    format!("list: {err}"),
+                ));
+            }
+            let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+            let rc = unsafe {
+                libc::fstatat(dirfd, name_ptr, st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW)
+            };
+            if rc != 0 {
+                let err = std::io::Error::last_os_error();
+                return Err(tool_error(
+                    NAME,
+                    ToolErrorKind::Execution,
+                    format!("list: {err}"),
+                ));
+            }
+            unsafe { st.assume_init() }.st_mode & libc::S_IFMT == libc::S_IFDIR
+        } else {
+            false
+        };
+        if is_dir {
+            names.push(format!("{name}/"));
+        } else {
+            names.push(name);
+        }
     }
     names.sort();
-    let truncated = names.len() > MAX_DIR_ENTRIES;
-    if truncated {
-        names.truncate(MAX_DIR_ENTRIES);
-    }
     Ok((names.join("\n"), truncated))
+}
+
+/// `closedir` the `DIR` from `fdopendir`, including on error returns.
+struct DirClose(*mut libc::DIR);
+
+impl Drop for DirClose {
+    fn drop(&mut self) {
+        unsafe { libc::closedir(self.0) };
+    }
 }

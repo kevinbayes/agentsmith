@@ -97,10 +97,21 @@ async fn file_tools_round_trip_inside_the_workdir() {
         .unwrap();
     assert_eq!(got.content, "hello");
 
+    let abs = work.join("note.txt");
+    let got = read
+        .call(ctx(&work), json!({"path": abs.to_str().unwrap()}))
+        .await
+        .unwrap();
+    assert_eq!(got.content, "hello");
+
+    std::os::unix::fs::symlink("ok", work.join("dirlink")).unwrap();
     let listing = list.call(ctx(&work), json!({"path": "."})).await.unwrap();
     let lines: Vec<&str> = listing.content.split('\n').collect();
     assert!(lines.contains(&"note.txt"));
     assert!(lines.contains(&"ok/"));
+    // A symlink to a directory is not a directory entry. Do not follow it.
+    assert!(lines.contains(&"dirlink"));
+    assert!(!lines.contains(&"dirlink/"));
 }
 
 #[tokio::test]
@@ -116,6 +127,7 @@ async fn path_jail_blocks_dotdot_and_symlink_escape() {
     std::os::unix::fs::symlink(&outside, work.join("out_dir")).unwrap();
     std::fs::write(work.join("inside.txt"), "inside").unwrap();
     std::os::unix::fs::symlink(work.join("inside.txt"), work.join("safe_link")).unwrap();
+    std::os::unix::fs::symlink("inside.txt", work.join("rel_link")).unwrap();
 
     let read = read_tool(4096, 4096);
     let list = ListDir::new(4096);
@@ -144,6 +156,15 @@ async fn path_jail_blocks_dotdot_and_symlink_escape() {
     assert_eq!(kind, ToolErrorKind::Execution);
     assert!(!message.contains("secret.txt"));
 
+    let through_parent = read
+        .call(ctx(&work), json!({"path": "out_dir/secret.txt"}))
+        .await
+        .unwrap_err();
+    let (kind, message) = kind_of(&through_parent);
+    assert_eq!(kind, ToolErrorKind::Execution);
+    assert_eq!(message, "path escapes the working directory");
+    assert!(!message.contains(secret));
+
     let absolute = read
         .call(
             ctx(&work),
@@ -159,6 +180,12 @@ async fn path_jail_blocks_dotdot_and_symlink_escape() {
         .await
         .unwrap();
     assert_eq!(safe.content, "inside");
+
+    let relative = read
+        .call(ctx(&work), json!({"path": "rel_link"}))
+        .await
+        .unwrap();
+    assert_eq!(relative.content, "inside");
 }
 
 #[tokio::test]
@@ -282,6 +309,41 @@ async fn read_respects_constructor_cap_and_char_boundary() {
         .unwrap_err();
     assert_eq!(kind_of(&err).0, ToolErrorKind::Execution);
     assert!(!kind_of(&err).1.contains('\u{fffd}'));
+}
+
+#[tokio::test]
+async fn read_and_list_do_not_block_on_a_fifo() {
+    let dir = TempDir::new();
+    let work = dir.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let fifo = work.join("pipe");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo");
+    assert!(status.success());
+
+    let read = read_tool(1024, 1024);
+    let started = Instant::now();
+    let err = tokio::time::timeout(
+        Duration::from_secs(3),
+        read.call(ctx(&work), json!({"path": "pipe"})),
+    )
+    .await
+    .expect("read_file blocked on a fifo")
+    .unwrap_err();
+    assert_eq!(kind_of(&err).0, ToolErrorKind::Execution);
+    assert!(started.elapsed() < Duration::from_secs(3));
+
+    let list = ListDir::new(1024);
+    let err = tokio::time::timeout(
+        Duration::from_secs(3),
+        list.call(ctx(&work), json!({"path": "pipe"})),
+    )
+    .await
+    .expect("list_dir blocked on a fifo")
+    .unwrap_err();
+    assert_eq!(kind_of(&err).0, ToolErrorKind::Execution);
 }
 
 #[tokio::test]
@@ -613,6 +675,54 @@ async fn shell_timeout_kills_the_process_group() {
         kill_pid(pid);
     }
     assert!(dead, "process group member {pid} still alive");
+}
+
+#[tokio::test]
+async fn shell_background_sleep_is_killed_when_the_leader_exits() {
+    let dir = TempDir::new();
+    let work = dir.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let pid_path = work.join("sleep.pid");
+    // `sh -c 'sleep 30 &'`: the leader exits immediately and the sleep stays
+    // in its process group. Record $! so the test can see that grandchild.
+    let command = format!(
+        "sleep 30 & echo $! > {}",
+        sh_quote(pid_path.to_str().unwrap())
+    );
+    let shell = Shell::new(Duration::from_secs(5), Duration::from_secs(5), 1024);
+    let started = Instant::now();
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        shell.call(ctx(&work), json!({"command": command})),
+    )
+    .await;
+    let elapsed = started.elapsed();
+    let output = match result {
+        Ok(inner) => inner.expect("background sleep must not fail the command"),
+        Err(_) => {
+            kill_path(&pid_path);
+            panic!("shell call hung; elapsed {elapsed:?}");
+        }
+    };
+    assert!(
+        elapsed < Duration::from_secs(8),
+        "background sleep was left running: {elapsed:?} output {:?}",
+        output.content
+    );
+    let pid_text = std::fs::read_to_string(&pid_path).expect("child pid was not recorded");
+    let pid: u32 = pid_text.trim().parse().expect("pid");
+    let mut dead = false;
+    for _ in 0..50 {
+        if !pid_alive(pid) {
+            dead = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    if !dead {
+        kill_pid(pid);
+    }
+    assert!(dead, "background sleep {pid} still alive");
 }
 
 #[tokio::test]

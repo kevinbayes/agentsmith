@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["agentsmith-core", "agentsmith-cli"]
+members = ["agentsmith-core", "agentsmith-llm", "agentsmith-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,13 +9,18 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 agentsmith-core = { path = "agentsmith-core" }
+async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 gethostname = "1"
+rand = "0.9"
 regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
+tokio = { version = "1", features = ["macros", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
 url = "2"
 uuid = { version = "1", features = ["v7"] }

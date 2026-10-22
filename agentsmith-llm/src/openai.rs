@@ -160,8 +160,9 @@ impl Llm for OpenAiCompatible {
 
 enum OnceError {
     Cancelled,
-    /// Attempt budget is exhausted, or the status must not be retried.
+    /// Do not retry.
     Done(Error),
+    /// `complete` retries this until the attempt budget is exhausted.
     Retry(Error),
 }
 
@@ -195,9 +196,13 @@ fn build_body(request: &CompletionRequest) -> Result<Value, Error> {
         "model": request.model,
         "messages": request.messages.iter().map(message_to_json).collect::<Vec<_>>(),
         "max_tokens": request.max_output_tokens,
-        "tools": request.tools.iter().map(tool_to_json).collect::<Vec<_>>(),
-        "tool_choice": tool_choice_to_json(&request.tool_choice),
     });
+    // An empty tools array plus tool_choice is a 400 on compatible servers,
+    // and that 400 is not retried. Send both keys only when there is a tool.
+    if !request.tools.is_empty() {
+        body["tools"] = Value::Array(request.tools.iter().map(tool_to_json).collect());
+        body["tool_choice"] = tool_choice_to_json(&request.tool_choice);
+    }
     if let Some(temperature) = request.temperature {
         if !temperature.is_finite() {
             return Err(llm_error(
@@ -581,6 +586,26 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn empty_tool_list_omits_tools_and_tool_choice() {
+        let request = CompletionRequest {
+            model: "m".into(),
+            messages: vec![Message::User {
+                content: "hi".into(),
+            }],
+            tools: Vec::new(),
+            tool_choice: ToolChoice::Function {
+                name: "submit_plan".into(),
+            },
+            max_output_tokens: 32,
+            temperature: None,
+            cancel: CancellationToken::new(),
+        };
+        let body = build_body(&request).unwrap();
+        assert!(body.get("tools").is_none(), "{body}");
+        assert!(body.get("tool_choice").is_none(), "{body}");
     }
 
     #[test]

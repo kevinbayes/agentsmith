@@ -121,7 +121,6 @@ async fn trailing_slash_base_and_function_tool_choice() {
         },
         Some(0.2),
     );
-    request.tools.clear();
     request.messages.truncate(2);
 
     let completion = llm.complete(request).await.expect("complete");

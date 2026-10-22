@@ -1,0 +1,23 @@
+[package]
+name = "agentsmith-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Tool trait, registry, and builtin tools."
+
+[dependencies]
+agentsmith-core.workspace = true
+async-trait.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+agentsmith-core.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

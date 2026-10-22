@@ -3,7 +3,6 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use url::Url;
 
@@ -87,165 +86,132 @@ pub enum FailurePolicy {
     FailFast,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum McpTransport {
     #[default]
     Stdio,
 }
 
+impl<'de> Deserialize<'de> for McpTransport {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        if raw == "stdio" {
+            Ok(Self::Stdio)
+        } else {
+            Err(serde::de::Error::custom(
+                "streamable HTTP MCP is not supported in v1",
+            ))
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
-    #[serde(default)]
     pub harness: HarnessConfig,
-    #[serde(default)]
     pub llm: LlmConfig,
-    #[serde(default, rename = "loop")]
+    #[serde(rename = "loop")]
     pub loop_: LoopConfig,
-    #[serde(default)]
     pub tools: ToolsConfig,
-    #[serde(default)]
     pub service: ServiceConfig,
-    #[serde(default)]
     pub reporter: ReporterConfig,
-    #[serde(default)]
     pub host: HostConfig,
-    #[serde(default)]
     pub mcp: McpConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
 pub struct HarnessConfig {
-    #[serde(default)]
     pub name: String,
-    #[serde(default)]
     pub log_level: LogLevel,
-    #[serde(default)]
     pub data_dir: PathBuf,
-    #[serde(default)]
     pub workdir: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct LlmConfig {
-    #[serde(default = "default_base_url")]
     pub base_url: String,
-    #[serde(default)]
     pub model: String,
-    #[serde(default)]
     pub api_key: String,
-    #[serde(default = "default_llm_timeout_secs")]
     pub timeout_secs: u64,
-    #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
-    #[serde(default = "default_llm_retries")]
     pub retries: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct LoopConfig {
-    #[serde(default = "default_react_max_iterations")]
     pub react_max_iterations: u64,
-    #[serde(default = "default_step_max_iterations")]
     pub step_max_iterations: u64,
-    #[serde(default = "default_planner_attempts")]
     pub planner_attempts: u64,
-    #[serde(default = "default_max_consecutive_tool_errors")]
     pub max_consecutive_tool_errors: u64,
-    #[serde(default = "default_max_subagent_depth")]
     pub max_subagent_depth: u64,
-    #[serde(default = "default_max_fanout")]
     pub max_fanout: u64,
-    #[serde(default = "default_max_live_subagents")]
     pub max_live_subagents: u64,
-    #[serde(default = "default_spawn_timeout_secs")]
     pub spawn_timeout_secs: u64,
-    #[serde(default)]
     pub failure_policy: FailurePolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ToolsConfig {
-    #[serde(default = "default_tool_max_output_bytes")]
     pub max_output_bytes: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub allow: Option<Vec<String>>,
-    #[serde(default)]
     pub shell: ShellConfig,
-    #[serde(default)]
     pub files: FilesConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ShellConfig {
     /// `None` when the key is absent. Foreground and service resolve it later.
-    #[serde(default)]
     pub enabled: Option<bool>,
-    #[serde(default = "default_shell_timeout_secs")]
     pub timeout_secs: u64,
-    #[serde(default = "default_shell_max_timeout_secs")]
     pub max_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct FilesConfig {
-    #[serde(default = "default_max_read_bytes")]
     pub max_read_bytes: u64,
-    #[serde(default = "default_max_write_bytes")]
     pub max_write_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ServiceConfig {
-    #[serde(default = "default_bind")]
     pub bind: String,
-    #[serde(default)]
     pub token: String,
-    #[serde(default = "default_max_runs")]
     pub max_runs: u64,
-    #[serde(default = "default_shutdown_grace_secs")]
     pub shutdown_grace_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct ReporterConfig {
-    #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
     pub endpoint: String,
-    #[serde(default)]
     pub token_url: String,
-    #[serde(default)]
     pub client_id: String,
-    #[serde(default)]
     pub client_secret: String,
-    #[serde(default)]
     pub harness_name: String,
-    #[serde(default = "default_reporter_interval_secs")]
     pub interval_secs: u64,
-    #[serde(default = "default_reporter_timeout_secs")]
     pub timeout_secs: u64,
-    #[serde(default = "default_token_skew_secs")]
     pub token_skew_secs: u64,
-    #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct HostConfig {
-    #[serde(default)]
     pub watch: Vec<HostWatch>,
 }
 
@@ -259,52 +225,33 @@ pub struct HostWatch {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct McpConfig {
-    #[serde(default)]
     pub servers: BTreeMap<String, McpServerConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct McpServerConfig {
-    #[serde(default)]
     pub transport: McpTransport,
-    #[serde(default)]
     pub command: String,
-    #[serde(default)]
     pub args: Vec<String>,
-    #[serde(default)]
     pub required: bool,
-    #[serde(default = "default_mcp_connect_timeout_secs")]
     pub connect_timeout_secs: u64,
-    #[serde(default = "default_mcp_call_timeout_secs")]
     pub call_timeout_secs: u64,
-    #[serde(default)]
     pub env: BTreeMap<String, String>,
-}
-
-impl Default for HarnessConfig {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            log_level: LogLevel::Info,
-            data_dir: PathBuf::new(),
-            workdir: PathBuf::new(),
-        }
-    }
 }
 
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            base_url: default_base_url(),
+            base_url: DEFAULT_BASE_URL.to_string(),
             model: String::new(),
             api_key: String::new(),
-            timeout_secs: default_llm_timeout_secs(),
-            max_output_tokens: default_max_output_tokens(),
+            timeout_secs: DEFAULT_LLM_TIMEOUT_SECS,
+            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             temperature: None,
-            retries: default_llm_retries(),
+            retries: DEFAULT_LLM_RETRIES,
         }
     }
 }
@@ -312,14 +259,14 @@ impl Default for LlmConfig {
 impl Default for LoopConfig {
     fn default() -> Self {
         Self {
-            react_max_iterations: default_react_max_iterations(),
-            step_max_iterations: default_step_max_iterations(),
-            planner_attempts: default_planner_attempts(),
-            max_consecutive_tool_errors: default_max_consecutive_tool_errors(),
-            max_subagent_depth: default_max_subagent_depth(),
-            max_fanout: default_max_fanout(),
-            max_live_subagents: default_max_live_subagents(),
-            spawn_timeout_secs: default_spawn_timeout_secs(),
+            react_max_iterations: DEFAULT_REACT_MAX_ITERATIONS,
+            step_max_iterations: DEFAULT_STEP_MAX_ITERATIONS,
+            planner_attempts: DEFAULT_PLANNER_ATTEMPTS,
+            max_consecutive_tool_errors: DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS,
+            max_subagent_depth: DEFAULT_MAX_SUBAGENT_DEPTH,
+            max_fanout: DEFAULT_MAX_FANOUT,
+            max_live_subagents: DEFAULT_MAX_LIVE_SUBAGENTS,
+            spawn_timeout_secs: DEFAULT_SPAWN_TIMEOUT_SECS,
             failure_policy: FailurePolicy::Continue,
         }
     }
@@ -328,7 +275,7 @@ impl Default for LoopConfig {
 impl Default for ToolsConfig {
     fn default() -> Self {
         Self {
-            max_output_bytes: default_tool_max_output_bytes(),
+            max_output_bytes: DEFAULT_TOOL_MAX_OUTPUT_BYTES,
             allow: None,
             shell: ShellConfig::default(),
             files: FilesConfig::default(),
@@ -340,8 +287,8 @@ impl Default for ShellConfig {
     fn default() -> Self {
         Self {
             enabled: None,
-            timeout_secs: default_shell_timeout_secs(),
-            max_timeout_secs: default_shell_max_timeout_secs(),
+            timeout_secs: DEFAULT_SHELL_TIMEOUT_SECS,
+            max_timeout_secs: DEFAULT_SHELL_MAX_TIMEOUT_SECS,
         }
     }
 }
@@ -349,8 +296,8 @@ impl Default for ShellConfig {
 impl Default for FilesConfig {
     fn default() -> Self {
         Self {
-            max_read_bytes: default_max_read_bytes(),
-            max_write_bytes: default_max_write_bytes(),
+            max_read_bytes: DEFAULT_MAX_READ_BYTES,
+            max_write_bytes: DEFAULT_MAX_WRITE_BYTES,
         }
     }
 }
@@ -358,10 +305,10 @@ impl Default for FilesConfig {
 impl Default for ServiceConfig {
     fn default() -> Self {
         Self {
-            bind: default_bind(),
+            bind: DEFAULT_BIND.to_string(),
             token: String::new(),
-            max_runs: default_max_runs(),
-            shutdown_grace_secs: default_shutdown_grace_secs(),
+            max_runs: DEFAULT_MAX_RUNS,
+            shutdown_grace_secs: DEFAULT_SHUTDOWN_GRACE_SECS,
         }
     }
 }
@@ -375,26 +322,50 @@ impl Default for ReporterConfig {
             client_id: String::new(),
             client_secret: String::new(),
             harness_name: String::new(),
-            interval_secs: default_reporter_interval_secs(),
-            timeout_secs: default_reporter_timeout_secs(),
-            token_skew_secs: default_token_skew_secs(),
-            max_body_bytes: default_max_body_bytes(),
+            interval_secs: DEFAULT_REPORTER_INTERVAL_SECS,
+            timeout_secs: DEFAULT_REPORTER_TIMEOUT_SECS,
+            token_skew_secs: DEFAULT_TOKEN_SKEW_SECS,
+            max_body_bytes: DEFAULT_MAX_BODY_BYTES,
+        }
+    }
+}
+
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            transport: McpTransport::Stdio,
+            command: String::new(),
+            args: Vec::new(),
+            required: false,
+            connect_timeout_secs: DEFAULT_MCP_CONNECT_TIMEOUT_SECS,
+            call_timeout_secs: DEFAULT_MCP_CALL_TIMEOUT_SECS,
+            env: BTreeMap::new(),
         }
     }
 }
 
 impl Config {
     /// First 12 lowercase hex characters of the canonical config hash.
-    pub fn fingerprint(&self) -> String {
-        sha256_12(self.canonical_json().as_bytes())
+    pub fn fingerprint(&self) -> Result<String, Error> {
+        Ok(sha256_12(self.canonical_json()?.as_bytes()))
     }
 
-    fn canonical_json(&self) -> String {
-        let mut value = serde_json::to_value(self).expect("config serializes to json");
-        blank_secrets(&mut value);
-        let mut out = String::new();
-        write_canonical(&mut out, &value);
-        out
+    fn canonical_json(&self) -> Result<String, Error> {
+        let mut cfg = self.clone();
+        cfg.llm.api_key.clear();
+        cfg.reporter.client_secret.clear();
+        cfg.service.token.clear();
+        for server in cfg.mcp.servers.values_mut() {
+            for value in server.env.values_mut() {
+                value.clear();
+            }
+        }
+        // `to_value` lands in a `BTreeMap` (no `preserve_order`), so object keys
+        // are already in UTF-8 order. Struct field order is not.
+        let value = serde_json::to_value(&cfg)
+            .map_err(|err| Error::Config(format!("config fingerprint: {err}")))?;
+        serde_json::to_string(&value)
+            .map_err(|err| Error::Config(format!("config fingerprint: {err}")))
     }
 }
 
@@ -635,6 +606,13 @@ fn validate(cfg: &Config) -> Result<(), Error> {
 
 fn validate_llm(cfg: &Config) -> Result<(), Error> {
     check_url("llm.base_url", &cfg.llm.base_url, false)?;
+    if let Some(temperature) = cfg.llm.temperature {
+        if !temperature.is_finite() {
+            return Err(Error::Config(
+                "llm.temperature must be a finite number".into(),
+            ));
+        }
+    }
     ceiling(
         "llm.timeout_secs",
         cfg.llm.timeout_secs,
@@ -700,6 +678,12 @@ fn validate_tools(cfg: &Config) -> Result<(), Error> {
         cfg.tools.shell.max_timeout_secs,
         CEILING_SHELL_MAX_TIMEOUT_SECS,
     )?;
+    if cfg.tools.shell.timeout_secs > cfg.tools.shell.max_timeout_secs {
+        return Err(Error::Config(format!(
+            "tools.shell.timeout_secs {} exceeds tools.shell.max_timeout_secs {}",
+            cfg.tools.shell.timeout_secs, cfg.tools.shell.max_timeout_secs
+        )));
+    }
     ceiling(
         "tools.files.max_read_bytes",
         cfg.tools.files.max_read_bytes,
@@ -760,8 +744,18 @@ fn validate_host(cfg: &Config) -> Result<(), Error> {
     Ok(())
 }
 
+const BUILTIN_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "write_file",
+    "list_dir",
+    "shell",
+    "finish",
+    "spawn_subagents",
+];
+
 fn validate_mcp(cfg: &Config) -> Result<(), Error> {
     for (name, server) in &cfg.mcp.servers {
+        validate_mcp_server_name(name)?;
         ceiling(
             &format!("mcp.servers.{name}.connect_timeout_secs"),
             server.connect_timeout_secs,
@@ -772,6 +766,29 @@ fn validate_mcp(cfg: &Config) -> Result<(), Error> {
             server.call_timeout_secs,
             CEILING_MCP_CALL_TIMEOUT_SECS,
         )?;
+    }
+    Ok(())
+}
+
+fn validate_mcp_server_name(name: &str) -> Result<(), Error> {
+    let bytes = name.as_bytes();
+    let shaped = bytes.len() <= 32
+        && bytes
+            .first()
+            .is_some_and(|first| first.is_ascii_lowercase())
+        && bytes
+            .iter()
+            .skip(1)
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_');
+    if !shaped || name.contains("__") {
+        return Err(Error::Config(format!(
+            "mcp server name {name:?} must match ^[a-z][a-z0-9_]{{0,31}}$ and must not contain __"
+        )));
+    }
+    if BUILTIN_TOOL_NAMES.contains(&name) {
+        return Err(Error::Config(format!(
+            "mcp server name {name:?} must not equal a builtin tool name"
+        )));
     }
     Ok(())
 }
@@ -787,23 +804,20 @@ fn ceiling(field: &str, value: u64, max: u64) -> Result<(), Error> {
 }
 
 fn check_bind(bind: &str) -> Result<(), Error> {
-    if bind_is_loopback(bind) {
+    let loopback = if let Ok(addr) = bind.parse::<SocketAddr>() {
+        addr.ip().is_loopback()
+    } else if let Some((host, port)) = bind.rsplit_once(':') {
+        !port.is_empty() && port.parse::<u16>().is_ok() && host.eq_ignore_ascii_case("localhost")
+    } else {
+        false
+    };
+    if loopback {
         Ok(())
     } else {
         Err(Error::Config(format!(
             "service.bind must be loopback (127.0.0.1, ::1, or localhost), got {bind}"
         )))
     }
-}
-
-fn bind_is_loopback(bind: &str) -> bool {
-    if let Ok(addr) = bind.parse::<SocketAddr>() {
-        return addr.ip().is_loopback();
-    }
-    let Some((host, port)) = bind.rsplit_once(':') else {
-        return false;
-    };
-    !port.is_empty() && port.parse::<u16>().is_ok() && host.eq_ignore_ascii_case("localhost")
 }
 
 fn check_url(field: &str, raw: &str, allow_empty: bool) -> Result<(), Error> {
@@ -931,14 +945,11 @@ fn overlay_path(slot: &mut PathBuf, env: &BTreeMap<String, String>, key: &str) {
 
 fn overlay_u64(slot: &mut u64, env: &BTreeMap<String, String>, key: &str) -> Result<(), Error> {
     if let Some(value) = env.get(key) {
-        *slot = parse_u64(key, value)?;
+        *slot = value
+            .parse::<u64>()
+            .map_err(|_| Error::Config(format!("{key} must be an integer, got {value}")))?;
     }
     Ok(())
-}
-
-fn parse_u64(key: &str, raw: &str) -> Result<u64, Error> {
-    raw.parse::<u64>()
-        .map_err(|_| Error::Config(format!("{key} must be an integer, got {raw}")))
 }
 
 fn parse_f32(key: &str, raw: &str) -> Result<f32, Error> {
@@ -982,171 +993,13 @@ fn parse_failure_policy(raw: &str) -> Result<FailurePolicy, Error> {
     }
 }
 
-fn blank_secrets(value: &mut Value) {
-    let Some(root) = value.as_object_mut() else {
-        return;
-    };
-    blank_string_field(root, "llm", "api_key");
-    blank_string_field(root, "reporter", "client_secret");
-    blank_string_field(root, "service", "token");
-    blank_mcp_env(root);
-}
-
-fn blank_string_field(root: &mut serde_json::Map<String, Value>, section: &str, field: &str) {
-    let Some(child) = root.get_mut(section).and_then(Value::as_object_mut) else {
-        return;
-    };
-    child.insert(field.to_string(), Value::String(String::new()));
-}
-
-fn blank_mcp_env(root: &mut serde_json::Map<String, Value>) {
-    let Some(mcp) = root.get_mut("mcp").and_then(Value::as_object_mut) else {
-        return;
-    };
-    let Some(servers) = mcp.get_mut("servers").and_then(Value::as_object_mut) else {
-        return;
-    };
-    for server in servers.values_mut() {
-        let Some(server) = server.as_object_mut() else {
-            continue;
-        };
-        let Some(env) = server.get_mut("env").and_then(Value::as_object_mut) else {
-            continue;
-        };
-        for value in env.values_mut() {
-            *value = Value::String(String::new());
-        }
-    }
-}
-
-fn write_canonical(out: &mut String, value: &Value) {
-    match value {
-        Value::Null => out.push_str("null"),
-        Value::Bool(true) => out.push_str("true"),
-        Value::Bool(false) => out.push_str("false"),
-        Value::Number(number) => out.push_str(&number.to_string()),
-        Value::String(text) => {
-            out.push_str(&serde_json::to_string(text).expect("string encodes"));
-        }
-        Value::Array(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_canonical(out, item);
-            }
-            out.push(']');
-        }
-        Value::Object(map) => {
-            out.push('{');
-            let entries: BTreeMap<&str, &Value> = map
-                .iter()
-                .map(|(key, child)| (key.as_str(), child))
-                .collect();
-            let mut first = true;
-            for (key, child) in entries {
-                if !first {
-                    out.push(',');
-                }
-                first = false;
-                out.push_str(&serde_json::to_string(key).expect("key encodes"));
-                out.push(':');
-                write_canonical(out, child);
-            }
-            out.push('}');
-        }
-    }
-}
-
 fn sha256_12(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(12);
-    for byte in digest.iter().take(6) {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
-fn default_base_url() -> String {
-    DEFAULT_BASE_URL.to_string()
-}
-fn default_llm_timeout_secs() -> u64 {
-    DEFAULT_LLM_TIMEOUT_SECS
-}
-fn default_max_output_tokens() -> u64 {
-    DEFAULT_MAX_OUTPUT_TOKENS
-}
-fn default_llm_retries() -> u64 {
-    DEFAULT_LLM_RETRIES
-}
-fn default_react_max_iterations() -> u64 {
-    DEFAULT_REACT_MAX_ITERATIONS
-}
-fn default_step_max_iterations() -> u64 {
-    DEFAULT_STEP_MAX_ITERATIONS
-}
-fn default_planner_attempts() -> u64 {
-    DEFAULT_PLANNER_ATTEMPTS
-}
-fn default_max_consecutive_tool_errors() -> u64 {
-    DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS
-}
-fn default_max_subagent_depth() -> u64 {
-    DEFAULT_MAX_SUBAGENT_DEPTH
-}
-fn default_max_fanout() -> u64 {
-    DEFAULT_MAX_FANOUT
-}
-fn default_max_live_subagents() -> u64 {
-    DEFAULT_MAX_LIVE_SUBAGENTS
-}
-fn default_spawn_timeout_secs() -> u64 {
-    DEFAULT_SPAWN_TIMEOUT_SECS
-}
-fn default_tool_max_output_bytes() -> u64 {
-    DEFAULT_TOOL_MAX_OUTPUT_BYTES
-}
-fn default_shell_timeout_secs() -> u64 {
-    DEFAULT_SHELL_TIMEOUT_SECS
-}
-fn default_shell_max_timeout_secs() -> u64 {
-    DEFAULT_SHELL_MAX_TIMEOUT_SECS
-}
-fn default_max_read_bytes() -> u64 {
-    DEFAULT_MAX_READ_BYTES
-}
-fn default_max_write_bytes() -> u64 {
-    DEFAULT_MAX_WRITE_BYTES
-}
-fn default_bind() -> String {
-    DEFAULT_BIND.to_string()
-}
-fn default_max_runs() -> u64 {
-    DEFAULT_MAX_RUNS
-}
-fn default_shutdown_grace_secs() -> u64 {
-    DEFAULT_SHUTDOWN_GRACE_SECS
-}
-fn default_reporter_interval_secs() -> u64 {
-    DEFAULT_REPORTER_INTERVAL_SECS
-}
-fn default_reporter_timeout_secs() -> u64 {
-    DEFAULT_REPORTER_TIMEOUT_SECS
-}
-fn default_token_skew_secs() -> u64 {
-    DEFAULT_TOKEN_SKEW_SECS
-}
-fn default_max_body_bytes() -> u64 {
-    DEFAULT_MAX_BODY_BYTES
-}
-fn default_mcp_connect_timeout_secs() -> u64 {
-    DEFAULT_MCP_CONNECT_TIMEOUT_SECS
-}
-fn default_mcp_call_timeout_secs() -> u64 {
-    DEFAULT_MCP_CALL_TIMEOUT_SECS
+    digest
+        .iter()
+        .take(6)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -1223,10 +1076,10 @@ mod tests {
         );
         assert!(!cfg.harness.name.is_empty());
         assert_eq!(cfg.reporter.harness_name, cfg.harness.name);
-        let fp = cfg.fingerprint();
+        let fp = cfg.fingerprint().unwrap();
         assert_eq!(fp.len(), 12);
         assert!(fp.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
-        assert!(!cfg.canonical_json().contains("temperature"));
+        assert!(!cfg.canonical_json().unwrap().contains("temperature"));
     }
 
     #[test]
@@ -1257,9 +1110,12 @@ mod tests {
         "#;
         let left = load_toml(base).unwrap();
         let right = load_toml(other).unwrap();
-        assert_eq!(left.canonical_json(), right.canonical_json());
-        assert_eq!(left.fingerprint(), right.fingerprint());
-        let json = left.canonical_json();
+        assert_eq!(
+            left.canonical_json().unwrap(),
+            right.canonical_json().unwrap()
+        );
+        assert_eq!(left.fingerprint().unwrap(), right.fingerprint().unwrap());
+        let json = left.canonical_json().unwrap();
         assert!(!json.contains("sentinel-api-key"));
         assert!(!json.contains("sentinel-client-secret"));
         assert!(!json.contains("sentinel-service-token"));
@@ -1273,14 +1129,17 @@ mod tests {
         let disabled = load_toml("[tools.shell]\nenabled = false\n").unwrap();
         assert_eq!(absent.tools.shell.enabled, None);
         assert_eq!(disabled.tools.shell.enabled, Some(false));
-        let absent_json = absent.canonical_json();
-        let disabled_json = disabled.canonical_json();
+        let absent_json = absent.canonical_json().unwrap();
+        let disabled_json = disabled.canonical_json().unwrap();
         assert!(absent_json.contains("\"enabled\":null"), "{absent_json}");
         assert!(
             disabled_json.contains("\"enabled\":false"),
             "{disabled_json}"
         );
-        assert_ne!(absent.fingerprint(), disabled.fingerprint());
+        assert_ne!(
+            absent.fingerprint().unwrap(),
+            disabled.fingerprint().unwrap()
+        );
     }
 
     #[test]
@@ -1315,8 +1174,11 @@ mod tests {
         "#;
         let left = load_toml(first).unwrap();
         let right = load_toml(second).unwrap();
-        assert_eq!(left.canonical_json(), right.canonical_json());
-        assert_eq!(left.fingerprint(), right.fingerprint());
+        assert_eq!(
+            left.canonical_json().unwrap(),
+            right.canonical_json().unwrap()
+        );
+        assert_eq!(left.fingerprint().unwrap(), right.fingerprint().unwrap());
     }
 
     #[test]
@@ -1324,8 +1186,8 @@ mod tests {
         let forward = "[[host.watch]]\nname = \"a\"\nbinary = \"a\"\n[[host.watch]]\nname = \"b\"\nbinary = \"b\"\n";
         let reverse = "[[host.watch]]\nname = \"b\"\nbinary = \"b\"\n[[host.watch]]\nname = \"a\"\nbinary = \"a\"\n";
         assert_ne!(
-            load_toml(forward).unwrap().fingerprint(),
-            load_toml(reverse).unwrap().fingerprint()
+            load_toml(forward).unwrap().fingerprint().unwrap(),
+            load_toml(reverse).unwrap().fingerprint().unwrap()
         );
     }
 
@@ -1595,5 +1457,113 @@ mod tests {
             "/no/such/agentsmith.toml".into(),
         );
         assert!(load_with(None, &env, &empty_cwd, &etc).is_err());
+    }
+
+    #[test]
+    fn non_finite_temperature_is_rejected() {
+        for raw in ["nan", "inf", "-inf", "1e39"] {
+            let err = load_toml(&format!("[llm]\ntemperature = {raw}\n")).expect_err(raw);
+            assert!(
+                err.to_string()
+                    .contains("llm.temperature must be a finite number"),
+                "{raw}: {err}"
+            );
+        }
+        assert_eq!(
+            load_toml("[llm]\ntemperature = 0.2\n")
+                .unwrap()
+                .llm
+                .temperature,
+            Some(0.2)
+        );
+    }
+
+    #[test]
+    fn mcp_server_names_are_restricted() {
+        for name in [
+            "foo__bar",
+            "shell",
+            "FS",
+            "9abc",
+            "foo-bar",
+            "read_file",
+            "write_file",
+            "list_dir",
+            "finish",
+            "spawn_subagents",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            let err =
+                load_toml(&format!("[mcp.servers.{name}]\ncommand = \"npx\"\n")).expect_err(name);
+            assert!(err.to_string().contains("mcp server name"), "{name}: {err}");
+        }
+        assert!(load_toml("[mcp.servers.fs]\ncommand = \"npx\"\n").is_ok());
+        let ok = "a".repeat(32);
+        assert!(load_toml(&format!("[mcp.servers.{ok}]\ncommand = \"npx\"\n")).is_ok());
+    }
+
+    #[test]
+    fn non_stdio_transport_names_the_v1_limit() {
+        for raw in ["http", "sse"] {
+            let err = load_toml(&format!("[mcp.servers.fs]\ntransport = \"{raw}\"\n")).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("streamable HTTP MCP is not supported in v1"),
+                "{raw}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn shell_timeout_cannot_exceed_its_max() {
+        let err =
+            load_toml("[tools.shell]\ntimeout_secs = 120\nmax_timeout_secs = 30\n").unwrap_err();
+        assert!(err.to_string().contains("timeout_secs"), "{err}");
+        assert!(err.to_string().contains("max_timeout_secs"), "{err}");
+        assert!(load_toml("[tools.shell]\ntimeout_secs = 30\nmax_timeout_secs = 30\n").is_ok());
+        assert!(load_toml("[tools.shell]\ntimeout_secs = 120\nmax_timeout_secs = 120\n").is_ok());
+    }
+
+    #[test]
+    fn partial_tables_keep_section_defaults() {
+        let cfg = load_toml("[llm]\nmodel = \"only\"\n").unwrap();
+        assert_eq!(cfg.llm.model, "only");
+        assert_eq!(cfg.llm.timeout_secs, DEFAULT_LLM_TIMEOUT_SECS);
+        assert_eq!(cfg.llm.base_url, DEFAULT_BASE_URL);
+        assert_eq!(cfg.llm.retries, DEFAULT_LLM_RETRIES);
+        assert_eq!(cfg.llm.max_output_tokens, DEFAULT_MAX_OUTPUT_TOKENS);
+        assert_eq!(cfg.tools.shell.enabled, None);
+        assert_eq!(cfg.tools.shell.timeout_secs, DEFAULT_SHELL_TIMEOUT_SECS);
+
+        let cfg = load_toml("[loop]\nmax_fanout = 4\n").unwrap();
+        assert_eq!(cfg.loop_.max_fanout, 4);
+        assert_eq!(cfg.loop_.react_max_iterations, DEFAULT_REACT_MAX_ITERATIONS);
+
+        let cfg = load_toml("[mcp.servers.fs]\ncommand = \"npx\"\n").unwrap();
+        let server = &cfg.mcp.servers["fs"];
+        assert_eq!(server.command, "npx");
+        assert_eq!(
+            server.connect_timeout_secs,
+            DEFAULT_MCP_CONNECT_TIMEOUT_SECS
+        );
+        assert_eq!(server.call_timeout_secs, DEFAULT_MCP_CALL_TIMEOUT_SECS);
+        assert_eq!(server.transport, McpTransport::Stdio);
+
+        let cfg = load_toml("[[host.watch]]\nname = \"n\"\nbinary = \"b\"\n").unwrap();
+        assert!(!cfg.host.watch[0].match_node);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fingerprint_of_non_utf8_workdir_is_a_config_error() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let mut cfg = load_toml("").unwrap();
+        cfg.harness.workdir = PathBuf::from(std::ffi::OsString::from_vec(vec![0xff]));
+        let err = cfg.fingerprint().expect_err("non-utf8 workdir");
+        match err {
+            Error::Config(message) => assert!(message.contains("config fingerprint"), "{message}"),
+            other => panic!("expected config error, got {other}"),
+        }
     }
 }

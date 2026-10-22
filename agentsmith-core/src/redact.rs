@@ -3,17 +3,19 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-// Consume the token body after each prefix. Replacing only `ghp_` would leave the secret.
+// After the prefix, consume `_`, `-`, and base64 `+/=` until whitespace.
+// `.` is excluded so a sentence period stays, except Bearer, whose alphabet
+// includes `.` and `~` (and `=`, so `Bearer ab=cd` does not leave `cd`).
+// `sk-` does not demand 8 alphanumerics before the first `-` (`sk-proj-`).
 static SECRET_TEXT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"sk-ant-[A-Za-z0-9_-]*",
-        r"|sk-[A-Za-z0-9]{8,}",
-        r"|github_pat_[A-Za-z0-9_]*",
-        r"|ghp_[A-Za-z0-9]*",
-        r"|gho_[A-Za-z0-9]*",
-        r"|xox[baprs]-[A-Za-z0-9-]*",
-        r"|xapp-[A-Za-z0-9-]*",
-        r"|Bearer [A-Za-z0-9\-._~+/]+=*",
+        r"sk-[A-Za-z0-9_+/=-]{8,}",
+        r"|github_pat_[A-Za-z0-9_+/=-]*",
+        r"|ghp_[A-Za-z0-9_+/=-]*",
+        r"|gho_[A-Za-z0-9_+/=-]*",
+        r"|xox[baprs]-[A-Za-z0-9_+/=-]*",
+        r"|xapp-[A-Za-z0-9_+/=-]*",
+        r"|Bearer [A-Za-z0-9_+/=.~-]+",
         r"|AKIA[0-9A-Z]{16}",
     ))
     .expect("secret text pattern")
@@ -94,5 +96,28 @@ mod tests {
         assert_eq!(out["token_url"], "[redacted]");
         assert_eq!(out["note"], "prefix [redacted] suffix");
         assert_eq!(out["items"][0], "[redacted]");
+        let tailed = json!({"note": "see ghp_abcDEF1234567890_TAIL now"});
+        assert_eq!(redact_value(&tailed)["note"], "see [redacted] now");
+    }
+
+    #[test]
+    fn redact_consumes_the_rest_of_the_token() {
+        for token in [
+            "sk-testsecret-MORESECRET",
+            "ghp_abcDEF1234567890_TAIL",
+            "ghp_abc_def_TAIL",
+            "sk-ant-api03-secret+plus/slash=",
+            "github_pat_11AAAA_secret-TAIL",
+            "xoxb-1234-abcdef_TAIL",
+            "Bearer ab=cd",
+            "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789",
+        ] {
+            assert_eq!(redact(token), "[redacted]", "{token}");
+        }
+        assert_eq!(redact("ghp_abcDEF1234567890."), "[redacted].");
+        assert_eq!(
+            redact("prefix sk-testsecret-MORESECRET."),
+            "prefix [redacted]."
+        );
     }
 }

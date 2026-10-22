@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use agentsmith_core::Error;
+use clap::{Parser, Subcommand, ValueEnum};
 
 mod commands;
 
@@ -23,6 +24,21 @@ enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Run one task in the foreground.
+    Run {
+        /// Task text for the agent.
+        #[arg(long)]
+        task: String,
+        /// Loop mode. Required unless the spec sets mode.
+        #[arg(long, value_enum)]
+        mode: Option<ModeArg>,
+        /// Agent spec TOML.
+        #[arg(long, value_name = "PATH")]
+        spec: Option<PathBuf>,
+        /// Working directory. Defaults to harness.workdir.
+        #[arg(long, value_name = "PATH")]
+        workdir: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -31,16 +47,49 @@ enum ConfigAction {
     Check,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ModeArg {
+    /// ReAct tool loop.
+    React,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let result = match cli.command {
+    match cli.command {
         Command::Config {
             action: ConfigAction::Check,
-        } => commands::config::check(cli.config.as_deref()),
-    };
-    if let Err(err) = result {
-        eprintln!("error: {err}");
-        return ExitCode::from(1);
+        } => match commands::config::check(cli.config.as_deref()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err}");
+                ExitCode::from(1)
+            }
+        },
+        Command::Run {
+            task,
+            mode,
+            spec,
+            workdir,
+        } => {
+            let mode = mode.map(|value| match value {
+                ModeArg::React => agentsmith_runtime::LoopMode::React,
+            });
+            match commands::run::execute(
+                cli.config.as_deref(),
+                &task,
+                mode,
+                spec.as_deref(),
+                workdir.as_deref(),
+            ) {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    match err {
+                        Error::Config(_) => ExitCode::from(2),
+                        _ => ExitCode::from(1),
+                    }
+                }
+            }
+        }
     }
-    ExitCode::SUCCESS
 }

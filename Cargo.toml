@@ -4,6 +4,10 @@ members = [
     "agentsmith-core",
     "agentsmith-llm",
     "agentsmith-tools",
+<<<<<<< HEAD
+=======
+    "agentsmith-runtime",
+>>>>>>> 443dc80 (ReAct loop and foreground run)
     "agentsmith-cli",
 ]
 
@@ -14,6 +18,8 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 agentsmith-core = { path = "agentsmith-core" }
+agentsmith-llm = { path = "agentsmith-llm" }
+agentsmith-runtime = { path = "agentsmith-runtime" }
 agentsmith-tools = { path = "agentsmith-tools" }
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
@@ -26,7 +32,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
-tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
 url = "2"

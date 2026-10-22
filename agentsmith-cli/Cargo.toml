@@ -11,4 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 agentsmith-core.workspace = true
+agentsmith-llm.workspace = true
+agentsmith-runtime.workspace = true
 clap.workspace = true
+tokio.workspace = true

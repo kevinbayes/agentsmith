@@ -1,0 +1,1599 @@
+use std::collections::BTreeMap;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use url::Url;
+
+use crate::Error;
+
+const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_LLM_TIMEOUT_SECS: u64 = 120;
+const CEILING_LLM_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 4096;
+const DEFAULT_LLM_RETRIES: u64 = 2;
+const CEILING_LLM_RETRIES: u64 = 4;
+
+const DEFAULT_REACT_MAX_ITERATIONS: u64 = 25;
+const CEILING_REACT_MAX_ITERATIONS: u64 = 100;
+const DEFAULT_STEP_MAX_ITERATIONS: u64 = 8;
+const CEILING_STEP_MAX_ITERATIONS: u64 = 50;
+const DEFAULT_PLANNER_ATTEMPTS: u64 = 2;
+const CEILING_PLANNER_ATTEMPTS: u64 = 2;
+const DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS: u64 = 5;
+const CEILING_MAX_CONSECUTIVE_TOOL_ERRORS: u64 = 20;
+const DEFAULT_MAX_SUBAGENT_DEPTH: u64 = 2;
+const CEILING_MAX_SUBAGENT_DEPTH: u64 = 4;
+const DEFAULT_MAX_FANOUT: u64 = 8;
+const CEILING_MAX_FANOUT: u64 = 8;
+const DEFAULT_MAX_LIVE_SUBAGENTS: u64 = 16;
+const CEILING_MAX_LIVE_SUBAGENTS: u64 = 32;
+const DEFAULT_SPAWN_TIMEOUT_SECS: u64 = 120;
+const CEILING_SPAWN_TIMEOUT_SECS: u64 = 600;
+
+const DEFAULT_TOOL_MAX_OUTPUT_BYTES: u64 = 32 * 1024;
+const CEILING_TOOL_MAX_OUTPUT_BYTES: u64 = 32 * 1024;
+const DEFAULT_SHELL_TIMEOUT_SECS: u64 = 30;
+const CEILING_SHELL_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_SHELL_MAX_TIMEOUT_SECS: u64 = 120;
+const CEILING_SHELL_MAX_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_MAX_READ_BYTES: u64 = 64 * 1024;
+const CEILING_MAX_READ_BYTES: u64 = 256 * 1024;
+const DEFAULT_MAX_WRITE_BYTES: u64 = 256 * 1024;
+const CEILING_MAX_WRITE_BYTES: u64 = 1024 * 1024;
+
+const DEFAULT_BIND: &str = "127.0.0.1:7433";
+const DEFAULT_MAX_RUNS: u64 = 2;
+const CEILING_MAX_RUNS: u64 = 8;
+const DEFAULT_SHUTDOWN_GRACE_SECS: u64 = 15;
+const CEILING_SHUTDOWN_GRACE_SECS: u64 = 60;
+const CEILING_RUN_SLOTS: u64 = 64;
+
+const DEFAULT_REPORTER_INTERVAL_SECS: u64 = 30;
+const MIN_REPORTER_INTERVAL_SECS: u64 = 10;
+const MAX_REPORTER_INTERVAL_SECS: u64 = 300;
+const DEFAULT_REPORTER_TIMEOUT_SECS: u64 = 10;
+const CEILING_REPORTER_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_TOKEN_SKEW_SECS: u64 = 30;
+const DEFAULT_MAX_BODY_BYTES: u64 = 256 * 1024;
+const CEILING_MAX_BODY_BYTES: u64 = 256 * 1024;
+
+const DEFAULT_MCP_CONNECT_TIMEOUT_SECS: u64 = 10;
+const CEILING_MCP_CONNECT_TIMEOUT_SECS: u64 = 60;
+const DEFAULT_MCP_CALL_TIMEOUT_SECS: u64 = 60;
+const CEILING_MCP_CALL_TIMEOUT_SECS: u64 = 300;
+const CEILING_HOST_WATCH: usize = 32;
+
+const ETC_CONFIG: &str = "/etc/agentsmith/config.toml";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    #[default]
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FailurePolicy {
+    #[default]
+    Continue,
+    FailFast,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTransport {
+    #[default]
+    Stdio,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    #[serde(default)]
+    pub harness: HarnessConfig,
+    #[serde(default)]
+    pub llm: LlmConfig,
+    #[serde(default, rename = "loop")]
+    pub loop_: LoopConfig,
+    #[serde(default)]
+    pub tools: ToolsConfig,
+    #[serde(default)]
+    pub service: ServiceConfig,
+    #[serde(default)]
+    pub reporter: ReporterConfig,
+    #[serde(default)]
+    pub host: HostConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessConfig {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub log_level: LogLevel,
+    #[serde(default)]
+    pub data_dir: PathBuf,
+    #[serde(default)]
+    pub workdir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LlmConfig {
+    #[serde(default = "default_base_url")]
+    pub base_url: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_llm_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_max_output_tokens")]
+    pub max_output_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default = "default_llm_retries")]
+    pub retries: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoopConfig {
+    #[serde(default = "default_react_max_iterations")]
+    pub react_max_iterations: u64,
+    #[serde(default = "default_step_max_iterations")]
+    pub step_max_iterations: u64,
+    #[serde(default = "default_planner_attempts")]
+    pub planner_attempts: u64,
+    #[serde(default = "default_max_consecutive_tool_errors")]
+    pub max_consecutive_tool_errors: u64,
+    #[serde(default = "default_max_subagent_depth")]
+    pub max_subagent_depth: u64,
+    #[serde(default = "default_max_fanout")]
+    pub max_fanout: u64,
+    #[serde(default = "default_max_live_subagents")]
+    pub max_live_subagents: u64,
+    #[serde(default = "default_spawn_timeout_secs")]
+    pub spawn_timeout_secs: u64,
+    #[serde(default)]
+    pub failure_policy: FailurePolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolsConfig {
+    #[serde(default = "default_tool_max_output_bytes")]
+    pub max_output_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow: Option<Vec<String>>,
+    #[serde(default)]
+    pub shell: ShellConfig,
+    #[serde(default)]
+    pub files: FilesConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellConfig {
+    /// `None` when the key is absent. Foreground and service resolve it later.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default = "default_shell_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_shell_max_timeout_secs")]
+    pub max_timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilesConfig {
+    #[serde(default = "default_max_read_bytes")]
+    pub max_read_bytes: u64,
+    #[serde(default = "default_max_write_bytes")]
+    pub max_write_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceConfig {
+    #[serde(default = "default_bind")]
+    pub bind: String,
+    #[serde(default)]
+    pub token: String,
+    #[serde(default = "default_max_runs")]
+    pub max_runs: u64,
+    #[serde(default = "default_shutdown_grace_secs")]
+    pub shutdown_grace_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReporterConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub token_url: String,
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+    #[serde(default)]
+    pub harness_name: String,
+    #[serde(default = "default_reporter_interval_secs")]
+    pub interval_secs: u64,
+    #[serde(default = "default_reporter_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_token_skew_secs")]
+    pub token_skew_secs: u64,
+    #[serde(default = "default_max_body_bytes")]
+    pub max_body_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct HostConfig {
+    #[serde(default)]
+    pub watch: Vec<HostWatch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostWatch {
+    pub name: String,
+    pub binary: String,
+    #[serde(default)]
+    pub match_node: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct McpConfig {
+    #[serde(default)]
+    pub servers: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerConfig {
+    #[serde(default)]
+    pub transport: McpTransport,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default = "default_mcp_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+    #[serde(default = "default_mcp_call_timeout_secs")]
+    pub call_timeout_secs: u64,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+impl Default for HarnessConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            log_level: LogLevel::Info,
+            data_dir: PathBuf::new(),
+            workdir: PathBuf::new(),
+        }
+    }
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            base_url: default_base_url(),
+            model: String::new(),
+            api_key: String::new(),
+            timeout_secs: default_llm_timeout_secs(),
+            max_output_tokens: default_max_output_tokens(),
+            temperature: None,
+            retries: default_llm_retries(),
+        }
+    }
+}
+
+impl Default for LoopConfig {
+    fn default() -> Self {
+        Self {
+            react_max_iterations: default_react_max_iterations(),
+            step_max_iterations: default_step_max_iterations(),
+            planner_attempts: default_planner_attempts(),
+            max_consecutive_tool_errors: default_max_consecutive_tool_errors(),
+            max_subagent_depth: default_max_subagent_depth(),
+            max_fanout: default_max_fanout(),
+            max_live_subagents: default_max_live_subagents(),
+            spawn_timeout_secs: default_spawn_timeout_secs(),
+            failure_policy: FailurePolicy::Continue,
+        }
+    }
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            max_output_bytes: default_tool_max_output_bytes(),
+            allow: None,
+            shell: ShellConfig::default(),
+            files: FilesConfig::default(),
+        }
+    }
+}
+
+impl Default for ShellConfig {
+    fn default() -> Self {
+        Self {
+            enabled: None,
+            timeout_secs: default_shell_timeout_secs(),
+            max_timeout_secs: default_shell_max_timeout_secs(),
+        }
+    }
+}
+
+impl Default for FilesConfig {
+    fn default() -> Self {
+        Self {
+            max_read_bytes: default_max_read_bytes(),
+            max_write_bytes: default_max_write_bytes(),
+        }
+    }
+}
+
+impl Default for ServiceConfig {
+    fn default() -> Self {
+        Self {
+            bind: default_bind(),
+            token: String::new(),
+            max_runs: default_max_runs(),
+            shutdown_grace_secs: default_shutdown_grace_secs(),
+        }
+    }
+}
+
+impl Default for ReporterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: String::new(),
+            token_url: String::new(),
+            client_id: String::new(),
+            client_secret: String::new(),
+            harness_name: String::new(),
+            interval_secs: default_reporter_interval_secs(),
+            timeout_secs: default_reporter_timeout_secs(),
+            token_skew_secs: default_token_skew_secs(),
+            max_body_bytes: default_max_body_bytes(),
+        }
+    }
+}
+
+impl Config {
+    /// First 12 lowercase hex characters of the canonical config hash.
+    pub fn fingerprint(&self) -> String {
+        sha256_12(self.canonical_json().as_bytes())
+    }
+
+    fn canonical_json(&self) -> String {
+        let mut value = serde_json::to_value(self).expect("config serializes to json");
+        blank_secrets(&mut value);
+        let mut out = String::new();
+        write_canonical(&mut out, &value);
+        out
+    }
+}
+
+/// Load TOML config, then apply `AGENTSMITH_*` overrides.
+///
+/// Search order: `explicit`, `AGENTSMITH_CONFIG`, `./agentsmith.toml`,
+/// `$XDG_CONFIG_HOME/agentsmith/config.toml` (default `~/.config/agentsmith/config.toml`),
+/// then `/etc/agentsmith/config.toml`. A missing file uses built-in defaults.
+pub fn load(explicit: Option<&Path>) -> Result<Config, Error> {
+    let env = std::env::vars().collect::<BTreeMap<_, _>>();
+    let cwd = std::env::current_dir()?;
+    load_with(explicit, &env, &cwd, Path::new(ETC_CONFIG))
+}
+
+fn load_with(
+    explicit: Option<&Path>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    etc_config: &Path,
+) -> Result<Config, Error> {
+    match resolve_config_path(explicit, env, cwd, etc_config)? {
+        Some(path) => {
+            let text = std::fs::read_to_string(&path)
+                .map_err(|err| Error::Config(format!("reading {}: {err}", path.display())))?;
+            from_toml_str(&text, &path.display().to_string(), env, cwd)
+        }
+        None => from_toml_str("", "config", env, cwd),
+    }
+}
+
+fn from_toml_str(
+    text: &str,
+    origin: &str,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<Config, Error> {
+    let cfg = if text.trim().is_empty() {
+        Config::default()
+    } else {
+        toml::from_str(text).map_err(|err| Error::Config(format!("{origin}: {err}")))?
+    };
+    finish(cfg, env, cwd)
+}
+
+fn finish(mut cfg: Config, env: &BTreeMap<String, String>, cwd: &Path) -> Result<Config, Error> {
+    apply_env(&mut cfg, env)?;
+    fill_dynamic(&mut cfg, env, cwd);
+    // The report interval is the one clamp. Every other ceiling rejects.
+    cfg.reporter.interval_secs = cfg
+        .reporter
+        .interval_secs
+        .clamp(MIN_REPORTER_INTERVAL_SECS, MAX_REPORTER_INTERVAL_SECS);
+    validate(&cfg)?;
+    disable_incomplete_reporter(&mut cfg);
+    Ok(cfg)
+}
+
+fn apply_env(cfg: &mut Config, env: &BTreeMap<String, String>) -> Result<(), Error> {
+    apply_harness_env(cfg, env)?;
+    apply_llm_env(cfg, env)?;
+    apply_loop_env(cfg, env)?;
+    apply_tools_env(cfg, env)?;
+    apply_service_env(cfg, env)?;
+    apply_reporter_env(cfg, env)?;
+    Ok(())
+}
+
+fn apply_harness_env(cfg: &mut Config, env: &BTreeMap<String, String>) -> Result<(), Error> {
+    overlay_string(&mut cfg.harness.name, env, "AGENTSMITH_HARNESS_NAME");
+    if let Some(raw) = env.get("AGENTSMITH_HARNESS_LOG_LEVEL") {
+        cfg.harness.log_level = parse_log_level(raw)?;
+    }
+    overlay_path(
+        &mut cfg.harness.data_dir,
+        env,
+        "AGENTSMITH_HARNESS_DATA_DIR",
+    );
+    overlay_path(&mut cfg.harness.workdir, env, "AGENTSMITH_HARNESS_WORKDIR");
+    Ok(())
+}
+
+fn apply_llm_env(cfg: &mut Config, env: &BTreeMap<String, String>) -> Result<(), Error> {
+    overlay_string(&mut cfg.llm.base_url, env, "AGENTSMITH_LLM_BASE_URL");
+    overlay_string(&mut cfg.llm.model, env, "AGENTSMITH_LLM_MODEL");
+    overlay_string(&mut cfg.llm.api_key, env, "AGENTSMITH_LLM_API_KEY");
+    overlay_u64(
+        &mut cfg.llm.timeout_secs,
+        env,
+        "AGENTSMITH_LLM_TIMEOUT_SECS",
+    )?;
+    overlay_u64(
+        &mut cfg.llm.max_output_tokens,
+        env,
+        "AGENTSMITH_LLM_MAX_OUTPUT_TOKENS",
+    )?;
+    if let Some(raw) = env.get("AGENTSMITH_LLM_TEMPERATURE") {
+        cfg.llm.temperature = Some(parse_f32("AGENTSMITH_LLM_TEMPERATURE", raw)?);
+    }
+    overlay_u64(&mut cfg.llm.retries, env, "AGENTSMITH_LLM_RETRIES")?;
+    Ok(())
+}
+
+fn apply_loop_env(cfg: &mut Config, env: &BTreeMap<String, String>) -> Result<(), Error> {
+    overlay_u64(
+        &mut cfg.loop_.react_max_iterations,
+        env,
+        "AGENTSMITH_LOOP_REACT_MAX_ITERATIONS",
+    )?;
+    overlay_u64(
+        &mut cfg.loop_.step_max_iterations,
+        env,
+        "AGENTSMITH_LOOP_STEP_MAX_ITERATIONS",
+    )?;
+    overlay_u64(
+        &mut cfg.loop_.max_subagent_depth,
+        env,
+        "AGENTSMITH_LOOP_MAX_SUBAGENT_DEPTH",
+    )?;
+    overlay_u64(&mut cfg.loop_.max_fanout, env, "AGENTSMITH_LOOP_MAX_FANOUT")?;
+    overlay_u64(
+        &mut cfg.loop_.max_live_subagents,
+        env,
+        "AGENTSMITH_LOOP_MAX_LIVE_SUBAGENTS",
+    )?;
+    overlay_u64(
+        &mut cfg.loop_.spawn_timeout_secs,
+        env,
+        "AGENTSMITH_LOOP_SPAWN_TIMEOUT_SECS",
+    )?;
+    if let Some(raw) = env.get("AGENTSMITH_LOOP_FAILURE_POLICY") {
+        cfg.loop_.failure_policy = parse_failure_policy(raw)?;
+    }
+    Ok(())
+}
+
+fn apply_tools_env(cfg: &mut Config, env: &BTreeMap<String, String>) -> Result<(), Error> {
+    // Absent stays None. A present variable is what forces Some(true/false).
+    if let Some(raw) = env.get("AGENTSMITH_TOOLS_SHELL_ENABLED") {
+        cfg.tools.shell.enabled = Some(parse_bool("AGENTSMITH_TOOLS_SHELL_ENABLED", raw)?);
+    }
+    Ok(())
+}
+
+fn apply_service_env(cfg: &mut Config, env: &BTreeMap<String, String>) -> Result<(), Error> {
+    overlay_string(&mut cfg.service.bind, env, "AGENTSMITH_SERVICE_BIND");
+    overlay_string(&mut cfg.service.token, env, "AGENTSMITH_SERVICE_TOKEN");
+    overlay_u64(
+        &mut cfg.service.max_runs,
+        env,
+        "AGENTSMITH_SERVICE_MAX_RUNS",
+    )?;
+    Ok(())
+}
+
+fn apply_reporter_env(cfg: &mut Config, env: &BTreeMap<String, String>) -> Result<(), Error> {
+    if let Some(raw) = env.get("AGENTSMITH_REPORTER_ENABLED") {
+        cfg.reporter.enabled = parse_bool("AGENTSMITH_REPORTER_ENABLED", raw)?;
+    }
+    overlay_string(
+        &mut cfg.reporter.endpoint,
+        env,
+        "AGENTSMITH_REPORTER_ENDPOINT",
+    );
+    overlay_string(
+        &mut cfg.reporter.token_url,
+        env,
+        "AGENTSMITH_REPORTER_TOKEN_URL",
+    );
+    overlay_string(
+        &mut cfg.reporter.client_id,
+        env,
+        "AGENTSMITH_REPORTER_CLIENT_ID",
+    );
+    overlay_string(
+        &mut cfg.reporter.client_secret,
+        env,
+        "AGENTSMITH_REPORTER_CLIENT_SECRET",
+    );
+    overlay_string(
+        &mut cfg.reporter.harness_name,
+        env,
+        "AGENTSMITH_REPORTER_HARNESS_NAME",
+    );
+    overlay_u64(
+        &mut cfg.reporter.interval_secs,
+        env,
+        "AGENTSMITH_REPORTER_INTERVAL_SECS",
+    )?;
+    overlay_u64(
+        &mut cfg.reporter.timeout_secs,
+        env,
+        "AGENTSMITH_REPORTER_TIMEOUT_SECS",
+    )?;
+    Ok(())
+}
+
+fn fill_dynamic(cfg: &mut Config, env: &BTreeMap<String, String>, cwd: &Path) {
+    if cfg.harness.name.is_empty() {
+        cfg.harness.name = hostname();
+    }
+    if cfg.harness.data_dir.as_os_str().is_empty() {
+        cfg.harness.data_dir = default_data_dir(env);
+    }
+    if cfg.harness.workdir.as_os_str().is_empty() {
+        cfg.harness.workdir = cwd.to_path_buf();
+    }
+    if cfg.reporter.harness_name.is_empty() {
+        cfg.reporter.harness_name = cfg.harness.name.clone();
+    }
+}
+
+fn disable_incomplete_reporter(cfg: &mut Config) {
+    if !cfg.reporter.enabled {
+        return;
+    }
+    let incomplete = cfg.reporter.endpoint.is_empty()
+        || cfg.reporter.token_url.is_empty()
+        || cfg.reporter.client_id.is_empty()
+        || cfg.reporter.client_secret.is_empty();
+    if incomplete {
+        cfg.reporter.enabled = false;
+        eprintln!(
+            "warning: reporter.enabled is set but endpoint, token_url, client_id, or client_secret is empty; reporter stays disabled"
+        );
+    }
+}
+
+fn validate(cfg: &Config) -> Result<(), Error> {
+    validate_llm(cfg)?;
+    validate_loop(cfg)?;
+    validate_tools(cfg)?;
+    validate_service(cfg)?;
+    validate_reporter(cfg)?;
+    validate_host(cfg)?;
+    validate_mcp(cfg)?;
+    Ok(())
+}
+
+fn validate_llm(cfg: &Config) -> Result<(), Error> {
+    check_url("llm.base_url", &cfg.llm.base_url, false)?;
+    ceiling(
+        "llm.timeout_secs",
+        cfg.llm.timeout_secs,
+        CEILING_LLM_TIMEOUT_SECS,
+    )?;
+    ceiling("llm.retries", cfg.llm.retries, CEILING_LLM_RETRIES)?;
+    Ok(())
+}
+
+fn validate_loop(cfg: &Config) -> Result<(), Error> {
+    ceiling(
+        "loop.react_max_iterations",
+        cfg.loop_.react_max_iterations,
+        CEILING_REACT_MAX_ITERATIONS,
+    )?;
+    ceiling(
+        "loop.step_max_iterations",
+        cfg.loop_.step_max_iterations,
+        CEILING_STEP_MAX_ITERATIONS,
+    )?;
+    ceiling(
+        "loop.planner_attempts",
+        cfg.loop_.planner_attempts,
+        CEILING_PLANNER_ATTEMPTS,
+    )?;
+    ceiling(
+        "loop.max_consecutive_tool_errors",
+        cfg.loop_.max_consecutive_tool_errors,
+        CEILING_MAX_CONSECUTIVE_TOOL_ERRORS,
+    )?;
+    ceiling(
+        "loop.max_subagent_depth",
+        cfg.loop_.max_subagent_depth,
+        CEILING_MAX_SUBAGENT_DEPTH,
+    )?;
+    ceiling("loop.max_fanout", cfg.loop_.max_fanout, CEILING_MAX_FANOUT)?;
+    ceiling(
+        "loop.max_live_subagents",
+        cfg.loop_.max_live_subagents,
+        CEILING_MAX_LIVE_SUBAGENTS,
+    )?;
+    ceiling(
+        "loop.spawn_timeout_secs",
+        cfg.loop_.spawn_timeout_secs,
+        CEILING_SPAWN_TIMEOUT_SECS,
+    )?;
+    Ok(())
+}
+
+fn validate_tools(cfg: &Config) -> Result<(), Error> {
+    ceiling(
+        "tools.max_output_bytes",
+        cfg.tools.max_output_bytes,
+        CEILING_TOOL_MAX_OUTPUT_BYTES,
+    )?;
+    ceiling(
+        "tools.shell.timeout_secs",
+        cfg.tools.shell.timeout_secs,
+        CEILING_SHELL_TIMEOUT_SECS,
+    )?;
+    ceiling(
+        "tools.shell.max_timeout_secs",
+        cfg.tools.shell.max_timeout_secs,
+        CEILING_SHELL_MAX_TIMEOUT_SECS,
+    )?;
+    ceiling(
+        "tools.files.max_read_bytes",
+        cfg.tools.files.max_read_bytes,
+        CEILING_MAX_READ_BYTES,
+    )?;
+    ceiling(
+        "tools.files.max_write_bytes",
+        cfg.tools.files.max_write_bytes,
+        CEILING_MAX_WRITE_BYTES,
+    )?;
+    Ok(())
+}
+
+fn validate_service(cfg: &Config) -> Result<(), Error> {
+    check_bind(&cfg.service.bind)?;
+    ceiling("service.max_runs", cfg.service.max_runs, CEILING_MAX_RUNS)?;
+    ceiling(
+        "service.shutdown_grace_secs",
+        cfg.service.shutdown_grace_secs,
+        CEILING_SHUTDOWN_GRACE_SECS,
+    )?;
+    // Active runs must fit in the AHSP `runs` array (maxItems 64).
+    let slots = cfg
+        .service
+        .max_runs
+        .saturating_mul(1u64.saturating_add(cfg.loop_.max_live_subagents));
+    if slots > CEILING_RUN_SLOTS {
+        return Err(Error::Config(format!(
+            "service.max_runs * (1 + loop.max_live_subagents) is {slots}, ceiling is {CEILING_RUN_SLOTS}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_reporter(cfg: &Config) -> Result<(), Error> {
+    check_url("reporter.endpoint", &cfg.reporter.endpoint, true)?;
+    check_url("reporter.token_url", &cfg.reporter.token_url, true)?;
+    ceiling(
+        "reporter.timeout_secs",
+        cfg.reporter.timeout_secs,
+        CEILING_REPORTER_TIMEOUT_SECS,
+    )?;
+    ceiling(
+        "reporter.max_body_bytes",
+        cfg.reporter.max_body_bytes,
+        CEILING_MAX_BODY_BYTES,
+    )?;
+    Ok(())
+}
+
+fn validate_host(cfg: &Config) -> Result<(), Error> {
+    if cfg.host.watch.len() > CEILING_HOST_WATCH {
+        return Err(Error::Config(format!(
+            "host.watch has {} entries, ceiling is {CEILING_HOST_WATCH}",
+            cfg.host.watch.len()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_mcp(cfg: &Config) -> Result<(), Error> {
+    for (name, server) in &cfg.mcp.servers {
+        ceiling(
+            &format!("mcp.servers.{name}.connect_timeout_secs"),
+            server.connect_timeout_secs,
+            CEILING_MCP_CONNECT_TIMEOUT_SECS,
+        )?;
+        ceiling(
+            &format!("mcp.servers.{name}.call_timeout_secs"),
+            server.call_timeout_secs,
+            CEILING_MCP_CALL_TIMEOUT_SECS,
+        )?;
+    }
+    Ok(())
+}
+
+fn ceiling(field: &str, value: u64, max: u64) -> Result<(), Error> {
+    if value > max {
+        Err(Error::Config(format!(
+            "{field} {value} exceeds ceiling {max}"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn check_bind(bind: &str) -> Result<(), Error> {
+    if bind_is_loopback(bind) {
+        Ok(())
+    } else {
+        Err(Error::Config(format!(
+            "service.bind must be loopback (127.0.0.1, ::1, or localhost), got {bind}"
+        )))
+    }
+}
+
+fn bind_is_loopback(bind: &str) -> bool {
+    if let Ok(addr) = bind.parse::<SocketAddr>() {
+        return addr.ip().is_loopback();
+    }
+    let Some((host, port)) = bind.rsplit_once(':') else {
+        return false;
+    };
+    !port.is_empty() && port.parse::<u16>().is_ok() && host.eq_ignore_ascii_case("localhost")
+}
+
+fn check_url(field: &str, raw: &str, allow_empty: bool) -> Result<(), Error> {
+    if raw.is_empty() {
+        if allow_empty {
+            return Ok(());
+        }
+        return Err(Error::Config(format!("{field} must not be empty")));
+    }
+    let parsed = Url::parse(raw).map_err(|err| Error::Config(format!("{field}: {err}")))?;
+    if parsed.scheme() == "https" {
+        return Ok(());
+    }
+    if parsed.scheme() == "http" && is_loopback_url_host(&parsed) {
+        return Ok(());
+    }
+    Err(Error::Config(format!(
+        "{field} must be https unless the host is localhost, 127.0.0.1, or ::1"
+    )))
+}
+
+fn is_loopback_url_host(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip == Ipv4Addr::LOCALHOST,
+        Some(url::Host::Ipv6(ip)) => ip == Ipv6Addr::LOCALHOST,
+        None => false,
+    }
+}
+
+fn resolve_config_path(
+    explicit: Option<&Path>,
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+    etc_config: &Path,
+) -> Result<Option<PathBuf>, Error> {
+    if let Some(path) = explicit {
+        return require_file(&anchored(cwd, path)).map(Some);
+    }
+    if let Some(raw) = env
+        .get("AGENTSMITH_CONFIG")
+        .filter(|value| !value.is_empty())
+    {
+        return require_file(&anchored(cwd, Path::new(raw))).map(Some);
+    }
+    let local = cwd.join("agentsmith.toml");
+    if local.is_file() {
+        return Ok(Some(local));
+    }
+    if let Some(xdg) = xdg_config_file(env) {
+        if xdg.is_file() {
+            return Ok(Some(xdg));
+        }
+    }
+    if etc_config.is_file() {
+        return Ok(Some(etc_config.to_path_buf()));
+    }
+    Ok(None)
+}
+
+fn require_file(path: &Path) -> Result<PathBuf, Error> {
+    if path.is_file() {
+        Ok(path.to_path_buf())
+    } else {
+        Err(Error::Config(format!(
+            "config file not found: {}",
+            path.display()
+        )))
+    }
+}
+
+fn anchored(cwd: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
+}
+
+fn xdg_config_file(env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    if let Some(xdg) = env.get("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(xdg).join("agentsmith").join("config.toml"));
+    }
+    let home = env.get("HOME").filter(|value| !value.is_empty())?;
+    Some(
+        PathBuf::from(home)
+            .join(".config")
+            .join("agentsmith")
+            .join("config.toml"),
+    )
+}
+
+fn default_data_dir(env: &BTreeMap<String, String>) -> PathBuf {
+    if let Some(xdg) = env.get("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(xdg).join("agentsmith");
+    }
+    if let Some(home) = env.get("HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(home).join(".local/share/agentsmith");
+    }
+    PathBuf::from(".local/share/agentsmith")
+}
+
+fn hostname() -> String {
+    let raw = gethostname::gethostname();
+    let name = raw.to_string_lossy();
+    let name = name.trim();
+    if name.is_empty() {
+        "unknown".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+fn overlay_string(slot: &mut String, env: &BTreeMap<String, String>, key: &str) {
+    if let Some(value) = env.get(key) {
+        *slot = value.clone();
+    }
+}
+
+fn overlay_path(slot: &mut PathBuf, env: &BTreeMap<String, String>, key: &str) {
+    if let Some(value) = env.get(key) {
+        *slot = PathBuf::from(value);
+    }
+}
+
+fn overlay_u64(slot: &mut u64, env: &BTreeMap<String, String>, key: &str) -> Result<(), Error> {
+    if let Some(value) = env.get(key) {
+        *slot = parse_u64(key, value)?;
+    }
+    Ok(())
+}
+
+fn parse_u64(key: &str, raw: &str) -> Result<u64, Error> {
+    raw.parse::<u64>()
+        .map_err(|_| Error::Config(format!("{key} must be an integer, got {raw}")))
+}
+
+fn parse_f32(key: &str, raw: &str) -> Result<f32, Error> {
+    let value = raw
+        .parse::<f32>()
+        .map_err(|_| Error::Config(format!("{key} must be a number, got {raw}")))?;
+    if !value.is_finite() {
+        return Err(Error::Config(format!("{key} must be a finite number")));
+    }
+    Ok(value)
+}
+
+fn parse_bool(key: &str, raw: &str) -> Result<bool, Error> {
+    match raw {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(Error::Config(format!("{key} must be true or false"))),
+    }
+}
+
+fn parse_log_level(raw: &str) -> Result<LogLevel, Error> {
+    match raw {
+        "trace" => Ok(LogLevel::Trace),
+        "debug" => Ok(LogLevel::Debug),
+        "info" => Ok(LogLevel::Info),
+        "warn" => Ok(LogLevel::Warn),
+        "error" => Ok(LogLevel::Error),
+        _ => Err(Error::Config(format!(
+            "harness.log_level must be trace|debug|info|warn|error, got {raw}"
+        ))),
+    }
+}
+
+fn parse_failure_policy(raw: &str) -> Result<FailurePolicy, Error> {
+    match raw {
+        "continue" => Ok(FailurePolicy::Continue),
+        "fail_fast" => Ok(FailurePolicy::FailFast),
+        _ => Err(Error::Config(format!(
+            "loop.failure_policy must be continue|fail_fast, got {raw}"
+        ))),
+    }
+}
+
+fn blank_secrets(value: &mut Value) {
+    let Some(root) = value.as_object_mut() else {
+        return;
+    };
+    blank_string_field(root, "llm", "api_key");
+    blank_string_field(root, "reporter", "client_secret");
+    blank_string_field(root, "service", "token");
+    blank_mcp_env(root);
+}
+
+fn blank_string_field(root: &mut serde_json::Map<String, Value>, section: &str, field: &str) {
+    let Some(child) = root.get_mut(section).and_then(Value::as_object_mut) else {
+        return;
+    };
+    child.insert(field.to_string(), Value::String(String::new()));
+}
+
+fn blank_mcp_env(root: &mut serde_json::Map<String, Value>) {
+    let Some(mcp) = root.get_mut("mcp").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let Some(servers) = mcp.get_mut("servers").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for server in servers.values_mut() {
+        let Some(server) = server.as_object_mut() else {
+            continue;
+        };
+        let Some(env) = server.get_mut("env").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for value in env.values_mut() {
+            *value = Value::String(String::new());
+        }
+    }
+}
+
+fn write_canonical(out: &mut String, value: &Value) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(true) => out.push_str("true"),
+        Value::Bool(false) => out.push_str("false"),
+        Value::Number(number) => out.push_str(&number.to_string()),
+        Value::String(text) => {
+            out.push_str(&serde_json::to_string(text).expect("string encodes"));
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_canonical(out, item);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            out.push('{');
+            let entries: BTreeMap<&str, &Value> = map
+                .iter()
+                .map(|(key, child)| (key.as_str(), child))
+                .collect();
+            let mut first = true;
+            for (key, child) in entries {
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                out.push_str(&serde_json::to_string(key).expect("key encodes"));
+                out.push(':');
+                write_canonical(out, child);
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn sha256_12(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(12);
+    for byte in digest.iter().take(6) {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn default_base_url() -> String {
+    DEFAULT_BASE_URL.to_string()
+}
+fn default_llm_timeout_secs() -> u64 {
+    DEFAULT_LLM_TIMEOUT_SECS
+}
+fn default_max_output_tokens() -> u64 {
+    DEFAULT_MAX_OUTPUT_TOKENS
+}
+fn default_llm_retries() -> u64 {
+    DEFAULT_LLM_RETRIES
+}
+fn default_react_max_iterations() -> u64 {
+    DEFAULT_REACT_MAX_ITERATIONS
+}
+fn default_step_max_iterations() -> u64 {
+    DEFAULT_STEP_MAX_ITERATIONS
+}
+fn default_planner_attempts() -> u64 {
+    DEFAULT_PLANNER_ATTEMPTS
+}
+fn default_max_consecutive_tool_errors() -> u64 {
+    DEFAULT_MAX_CONSECUTIVE_TOOL_ERRORS
+}
+fn default_max_subagent_depth() -> u64 {
+    DEFAULT_MAX_SUBAGENT_DEPTH
+}
+fn default_max_fanout() -> u64 {
+    DEFAULT_MAX_FANOUT
+}
+fn default_max_live_subagents() -> u64 {
+    DEFAULT_MAX_LIVE_SUBAGENTS
+}
+fn default_spawn_timeout_secs() -> u64 {
+    DEFAULT_SPAWN_TIMEOUT_SECS
+}
+fn default_tool_max_output_bytes() -> u64 {
+    DEFAULT_TOOL_MAX_OUTPUT_BYTES
+}
+fn default_shell_timeout_secs() -> u64 {
+    DEFAULT_SHELL_TIMEOUT_SECS
+}
+fn default_shell_max_timeout_secs() -> u64 {
+    DEFAULT_SHELL_MAX_TIMEOUT_SECS
+}
+fn default_max_read_bytes() -> u64 {
+    DEFAULT_MAX_READ_BYTES
+}
+fn default_max_write_bytes() -> u64 {
+    DEFAULT_MAX_WRITE_BYTES
+}
+fn default_bind() -> String {
+    DEFAULT_BIND.to_string()
+}
+fn default_max_runs() -> u64 {
+    DEFAULT_MAX_RUNS
+}
+fn default_shutdown_grace_secs() -> u64 {
+    DEFAULT_SHUTDOWN_GRACE_SECS
+}
+fn default_reporter_interval_secs() -> u64 {
+    DEFAULT_REPORTER_INTERVAL_SECS
+}
+fn default_reporter_timeout_secs() -> u64 {
+    DEFAULT_REPORTER_TIMEOUT_SECS
+}
+fn default_token_skew_secs() -> u64 {
+    DEFAULT_TOKEN_SKEW_SECS
+}
+fn default_max_body_bytes() -> u64 {
+    DEFAULT_MAX_BODY_BYTES
+}
+fn default_mcp_connect_timeout_secs() -> u64 {
+    DEFAULT_MCP_CONNECT_TIMEOUT_SECS
+}
+fn default_mcp_call_timeout_secs() -> u64 {
+    DEFAULT_MCP_CALL_TIMEOUT_SECS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_env() -> BTreeMap<String, String> {
+        BTreeMap::from([("HOME".to_string(), "/home/tester".to_string())])
+    }
+
+    fn workdir() -> PathBuf {
+        PathBuf::from("/work")
+    }
+
+    fn load_toml(text: &str) -> Result<Config, Error> {
+        load_toml_with(text, &test_env())
+    }
+
+    fn load_toml_with(text: &str, env: &BTreeMap<String, String>) -> Result<Config, Error> {
+        from_toml_str(text, "config", env, &workdir())
+    }
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static N: AtomicU64 = AtomicU64::new(0);
+            let n = N.fetch_add(1, Ordering::Relaxed);
+            let path =
+                std::env::temp_dir().join(format!("agentsmith-cfg-{}-{n}", std::process::id()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn defaults_load_without_model_or_api_key() {
+        let cfg = load_toml("").unwrap();
+        assert!(cfg.llm.model.is_empty());
+        assert!(cfg.llm.api_key.is_empty());
+        assert!(cfg.llm.temperature.is_none());
+        assert_eq!(cfg.llm.base_url, DEFAULT_BASE_URL);
+        assert_eq!(cfg.llm.timeout_secs, 120);
+        assert_eq!(cfg.llm.max_output_tokens, 4096);
+        assert_eq!(cfg.llm.retries, 2);
+        assert_eq!(cfg.loop_.react_max_iterations, 25);
+        assert_eq!(cfg.loop_.step_max_iterations, 8);
+        assert_eq!(cfg.loop_.planner_attempts, 2);
+        assert_eq!(cfg.loop_.max_fanout, 8);
+        assert_eq!(cfg.loop_.max_live_subagents, 16);
+        assert_eq!(cfg.loop_.failure_policy, FailurePolicy::Continue);
+        assert_eq!(cfg.tools.shell.enabled, None);
+        assert_eq!(cfg.tools.shell.timeout_secs, 30);
+        assert_eq!(cfg.tools.max_output_bytes, 32_768);
+        assert_eq!(cfg.tools.files.max_read_bytes, 65_536);
+        assert_eq!(cfg.tools.files.max_write_bytes, 262_144);
+        assert_eq!(cfg.service.bind, "127.0.0.1:7433");
+        assert_eq!(cfg.service.max_runs, 2);
+        assert!(!cfg.reporter.enabled);
+        assert_eq!(cfg.reporter.interval_secs, 30);
+        assert_eq!(cfg.reporter.max_body_bytes, 262_144);
+        assert_eq!(cfg.harness.log_level, LogLevel::Info);
+        assert_eq!(cfg.harness.workdir, workdir());
+        assert_eq!(
+            cfg.harness.data_dir,
+            PathBuf::from("/home/tester/.local/share/agentsmith")
+        );
+        assert!(!cfg.harness.name.is_empty());
+        assert_eq!(cfg.reporter.harness_name, cfg.harness.name);
+        let fp = cfg.fingerprint();
+        assert_eq!(fp.len(), 12);
+        assert!(fp.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
+        assert!(!cfg.canonical_json().contains("temperature"));
+    }
+
+    #[test]
+    fn secrets_do_not_change_the_fingerprint() {
+        let base = r#"
+            [llm]
+            api_key = "sentinel-api-key-a"
+            [service]
+            token = "sentinel-service-token-a"
+            [reporter]
+            client_secret = "sentinel-client-secret-a"
+            [mcp.servers.fs]
+            command = "npx"
+            [mcp.servers.fs.env]
+            NPM_CONFIG_CACHE = "sentinel-mcp-env-a"
+        "#;
+        let other = r#"
+            [service]
+            token = "sentinel-service-token-b"
+            [llm]
+            api_key = "sentinel-api-key-b"
+            [mcp.servers.fs.env]
+            NPM_CONFIG_CACHE = "sentinel-mcp-env-b"
+            [mcp.servers.fs]
+            command = "npx"
+            [reporter]
+            client_secret = "sentinel-client-secret-b"
+        "#;
+        let left = load_toml(base).unwrap();
+        let right = load_toml(other).unwrap();
+        assert_eq!(left.canonical_json(), right.canonical_json());
+        assert_eq!(left.fingerprint(), right.fingerprint());
+        let json = left.canonical_json();
+        assert!(!json.contains("sentinel-api-key"));
+        assert!(!json.contains("sentinel-client-secret"));
+        assert!(!json.contains("sentinel-service-token"));
+        assert!(!json.contains("sentinel-mcp-env"));
+        assert!(json.contains("\"NPM_CONFIG_CACHE\":\"\""));
+    }
+
+    #[test]
+    fn shell_enabled_null_and_false_hash_differently() {
+        let absent = load_toml("").unwrap();
+        let disabled = load_toml("[tools.shell]\nenabled = false\n").unwrap();
+        assert_eq!(absent.tools.shell.enabled, None);
+        assert_eq!(disabled.tools.shell.enabled, Some(false));
+        let absent_json = absent.canonical_json();
+        let disabled_json = disabled.canonical_json();
+        assert!(absent_json.contains("\"enabled\":null"), "{absent_json}");
+        assert!(
+            disabled_json.contains("\"enabled\":false"),
+            "{disabled_json}"
+        );
+        assert_ne!(absent.fingerprint(), disabled.fingerprint());
+    }
+
+    #[test]
+    fn toml_key_order_does_not_change_the_fingerprint() {
+        let first = r#"
+            [llm]
+            model = "m"
+            base_url = "https://api.openai.com/v1"
+            [service]
+            token = "t"
+            bind = "127.0.0.1:1"
+            [mcp.servers.fs.env]
+            B = "1"
+            A = "2"
+            [mcp.servers.fs]
+            command = "npx"
+            transport = "stdio"
+        "#;
+        let second = r#"
+            [mcp.servers.fs]
+            transport = "stdio"
+            command = "npx"
+            [mcp.servers.fs.env]
+            A = "2"
+            B = "1"
+            [service]
+            bind = "127.0.0.1:1"
+            token = "t"
+            [llm]
+            base_url = "https://api.openai.com/v1"
+            model = "m"
+        "#;
+        let left = load_toml(first).unwrap();
+        let right = load_toml(second).unwrap();
+        assert_eq!(left.canonical_json(), right.canonical_json());
+        assert_eq!(left.fingerprint(), right.fingerprint());
+    }
+
+    #[test]
+    fn watch_array_order_is_part_of_the_fingerprint() {
+        let forward = "[[host.watch]]\nname = \"a\"\nbinary = \"a\"\n[[host.watch]]\nname = \"b\"\nbinary = \"b\"\n";
+        let reverse = "[[host.watch]]\nname = \"b\"\nbinary = \"b\"\n[[host.watch]]\nname = \"a\"\nbinary = \"a\"\n";
+        assert_ne!(
+            load_toml(forward).unwrap().fingerprint(),
+            load_toml(reverse).unwrap().fingerprint()
+        );
+    }
+
+    #[test]
+    fn ceilings_bind_and_transport_reject() {
+        assert!(load_toml("[loop]\nplanner_attempts = 2\nmax_fanout = 8\n").is_ok());
+        assert!(load_toml("[loop]\nplanner_attempts = 3\n").is_err());
+        assert!(load_toml("[loop]\nmax_fanout = 9\n").is_err());
+        assert!(load_toml("[reporter]\nmax_body_bytes = 262144\n").is_ok());
+        assert!(load_toml("[reporter]\nmax_body_bytes = 262145\n").is_err());
+        assert!(load_toml("[service]\nbind = \"0.0.0.0:7433\"\n").is_err());
+        assert!(load_toml("[service]\nbind = \"192.168.1.5:80\"\n").is_err());
+        assert!(load_toml("[service]\nbind = \"localhost:7433\"\n").is_ok());
+        assert!(load_toml("[service]\nbind = \"[::1]:7433\"\n").is_ok());
+        assert!(load_toml("[mcp.servers.fs]\ntransport = \"http\"\n").is_err());
+        assert!(load_toml("[mcp.servers.fs]\ntransport = \"stdio\"\n").is_ok());
+        assert!(load_toml("harness.log_level = \"verbose\"\n").is_err());
+        assert!(load_toml("loop.failure_policy = \"retry\"\n").is_err());
+        assert!(
+            load_toml("harness.log_level = \"debug\"\nloop.failure_policy = \"fail_fast\"\n")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn run_slot_product_is_rejected_above_64() {
+        assert!(load_toml("[service]\nmax_runs = 8\n[loop]\nmax_live_subagents = 7\n").is_ok());
+        let err = load_toml("[service]\nmax_runs = 8\n[loop]\nmax_live_subagents = 8\n")
+            .expect_err("8 * 9 = 72");
+        assert!(err.to_string().contains("64"), "{err}");
+        assert!(load_toml("[service]\nmax_runs = 9\n").is_err());
+    }
+
+    #[test]
+    fn host_watch_rejects_more_than_32() {
+        let mut text = String::new();
+        for i in 0..33 {
+            text.push_str(&format!(
+                "[[host.watch]]\nname = \"n{i}\"\nbinary = \"b{i}\"\n"
+            ));
+        }
+        assert!(load_toml(&text).is_err());
+        text.clear();
+        for i in 0..32 {
+            text.push_str(&format!(
+                "[[host.watch]]\nname = \"n{i}\"\nbinary = \"b{i}\"\n"
+            ));
+        }
+        assert!(load_toml(&text).is_ok());
+    }
+
+    #[test]
+    fn env_override_beats_the_file_and_unknown_vars_are_ignored() {
+        let mut env = test_env();
+        env.insert("AGENTSMITH_LLM_MODEL".into(), "from-env".into());
+        env.insert("AGENTSMITH_TOOLS_SHELL_ENABLED".into(), "false".into());
+        env.insert("AGENTSMITH_LOOP_MAX_FANOUT".into(), "4".into());
+        env.insert("AGENTSMITH_NOT_A_REAL_KEY".into(), "1".into());
+        env.insert("AGENTSMITH_LOOP_PLANNER_ATTEMPTS".into(), "1".into());
+        let cfg = load_toml_with(
+            r#"
+            [llm]
+            model = "from-file"
+            [loop]
+            planner_attempts = 2
+            max_fanout = 8
+            "#,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(cfg.llm.model, "from-env");
+        assert_eq!(cfg.tools.shell.enabled, Some(false));
+        assert_eq!(cfg.loop_.max_fanout, 4);
+        assert_eq!(cfg.loop_.planner_attempts, 2);
+    }
+
+    #[test]
+    fn env_shell_enabled_true_sets_some() {
+        let mut env = test_env();
+        env.insert("AGENTSMITH_TOOLS_SHELL_ENABLED".into(), "true".into());
+        let cfg = load_toml_with("", &env).unwrap();
+        assert_eq!(cfg.tools.shell.enabled, Some(true));
+    }
+
+    #[test]
+    fn env_above_a_ceiling_fails_load() {
+        let mut env = test_env();
+        env.insert("AGENTSMITH_LOOP_MAX_FANOUT".into(), "9".into());
+        assert!(load_toml_with("[loop]\nmax_fanout = 8\n", &env).is_err());
+    }
+
+    #[test]
+    fn reporter_interval_is_clamped() {
+        assert_eq!(
+            load_toml("[reporter]\ninterval_secs = 1\n")
+                .unwrap()
+                .reporter
+                .interval_secs,
+            10
+        );
+        assert_eq!(
+            load_toml("[reporter]\ninterval_secs = 9999\n")
+                .unwrap()
+                .reporter
+                .interval_secs,
+            300
+        );
+        assert_eq!(
+            load_toml("[reporter]\ninterval_secs = 30\n")
+                .unwrap()
+                .reporter
+                .interval_secs,
+            30
+        );
+    }
+
+    #[test]
+    fn incomplete_reporter_stays_disabled() {
+        let cfg = load_toml(
+            r#"
+            [reporter]
+            enabled = true
+            endpoint = "https://control.example/state"
+            token_url = "https://auth.example/token"
+            client_id = "id"
+            "#,
+        )
+        .unwrap();
+        assert!(!cfg.reporter.enabled);
+
+        let cfg = load_toml(
+            r#"
+            [harness]
+            name = "box"
+            [reporter]
+            enabled = true
+            endpoint = "https://control.example/state"
+            token_url = "https://auth.example/token"
+            client_id = "id"
+            client_secret = "sec"
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.reporter.enabled);
+        assert_eq!(cfg.reporter.harness_name, "box");
+
+        let cfg = load_toml(
+            r#"
+            [harness]
+            name = "box"
+            [reporter]
+            harness_name = "other"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.reporter.harness_name, "other");
+    }
+
+    #[test]
+    fn urls_must_be_https_or_loopback() {
+        assert!(load_toml("[llm]\nbase_url = \"http://example.com/v1\"\n").is_err());
+        assert!(load_toml("[llm]\nbase_url = \"http://127.0.0.1:9/v1\"\n").is_ok());
+        assert!(load_toml("[llm]\nbase_url = \"http://localhost:9/v1\"\n").is_ok());
+        assert!(load_toml("[llm]\nbase_url = \"http://[::1]:9/v1\"\n").is_ok());
+        assert!(load_toml("[reporter]\nendpoint = \"http://10.0.0.1/x\"\n").is_err());
+        assert!(load_toml("[reporter]\nendpoint = \"\"\ntoken_url = \"\"\n").is_ok());
+        assert!(load_toml("[llm]\ntemperature = 0.2\n")
+            .unwrap()
+            .llm
+            .temperature
+            .is_some());
+    }
+
+    #[test]
+    fn data_dir_honors_xdg_data_home() {
+        let mut env = test_env();
+        env.insert("XDG_DATA_HOME".into(), "/var/data".into());
+        let cfg = load_toml_with("", &env).unwrap();
+        assert_eq!(cfg.harness.data_dir, PathBuf::from("/var/data/agentsmith"));
+    }
+
+    #[test]
+    fn search_order_explicit_then_env_then_cwd_then_xdg_then_etc() {
+        let scratch = Scratch::new();
+        let cwd = scratch.0.join("cwd");
+        let xdg = scratch.0.join("xdg");
+        let home = scratch.0.join("home");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(xdg.join("agentsmith")).unwrap();
+        std::fs::create_dir_all(home.join(".config/agentsmith")).unwrap();
+        std::fs::write(cwd.join("agentsmith.toml"), "harness.name = \"from-cwd\"\n").unwrap();
+        std::fs::write(
+            xdg.join("agentsmith/config.toml"),
+            "harness.name = \"from-xdg\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            home.join(".config/agentsmith/config.toml"),
+            "harness.name = \"from-home\"\n",
+        )
+        .unwrap();
+        let etc = scratch.0.join("etc.toml");
+        std::fs::write(&etc, "harness.name = \"from-etc\"\n").unwrap();
+        let env_path = scratch.0.join("env.toml");
+        std::fs::write(&env_path, "harness.name = \"from-env-path\"\n").unwrap();
+        let explicit = scratch.0.join("explicit.toml");
+        std::fs::write(&explicit, "harness.name = \"from-explicit\"\n").unwrap();
+
+        let mut env = test_env();
+        env.insert("XDG_CONFIG_HOME".into(), xdg.to_string_lossy().into_owned());
+        env.insert("HOME".into(), home.to_string_lossy().into_owned());
+
+        let cfg = load_with(None, &env, &cwd, &etc).unwrap();
+        assert_eq!(cfg.harness.name, "from-cwd");
+
+        let empty_cwd = scratch.0.join("empty-cwd");
+        std::fs::create_dir_all(&empty_cwd).unwrap();
+        let cfg = load_with(None, &env, &empty_cwd, &etc).unwrap();
+        assert_eq!(cfg.harness.name, "from-xdg");
+
+        env.remove("XDG_CONFIG_HOME");
+        let cfg = load_with(None, &env, &empty_cwd, &etc).unwrap();
+        assert_eq!(cfg.harness.name, "from-home");
+
+        let no_home = scratch.0.join("no-home");
+        std::fs::create_dir_all(&no_home).unwrap();
+        env.remove("HOME");
+        let cfg = load_with(None, &env, &no_home, &etc).unwrap();
+        assert_eq!(cfg.harness.name, "from-etc");
+
+        let missing_etc = scratch.0.join("missing.toml");
+        let cfg = load_with(None, &env, &no_home, &missing_etc).unwrap();
+        assert_ne!(cfg.harness.name, "from-etc");
+        assert!(!cfg.harness.name.is_empty());
+
+        env.insert(
+            "AGENTSMITH_CONFIG".into(),
+            env_path.to_string_lossy().into_owned(),
+        );
+        let cfg = load_with(None, &env, &cwd, &etc).unwrap();
+        assert_eq!(cfg.harness.name, "from-env-path");
+
+        let cfg = load_with(Some(&explicit), &env, &cwd, &etc).unwrap();
+        assert_eq!(cfg.harness.name, "from-explicit");
+
+        let relative_cwd = scratch.0.join("rel");
+        std::fs::create_dir_all(&relative_cwd).unwrap();
+        std::fs::write(
+            relative_cwd.join("custom.toml"),
+            "harness.name = \"from-relative\"\n",
+        )
+        .unwrap();
+        let cfg = load_with(Some(Path::new("custom.toml")), &env, &relative_cwd, &etc).unwrap();
+        assert_eq!(cfg.harness.name, "from-relative");
+
+        let err = load_with(
+            Some(scratch.0.join("nope.toml").as_path()),
+            &env,
+            &cwd,
+            &etc,
+        )
+        .expect_err("missing explicit");
+        assert!(err.to_string().contains("not found"), "{err}");
+
+        env.insert(
+            "AGENTSMITH_CONFIG".into(),
+            "/no/such/agentsmith.toml".into(),
+        );
+        assert!(load_with(None, &env, &empty_cwd, &etc).is_err());
+    }
+}

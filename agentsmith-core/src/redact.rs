@@ -52,16 +52,10 @@ pub fn cut_display(text: &str) -> String {
 }
 
 /// First task line, control characters removed, then [`redact`] and [`cut_display`].
-///
-/// A line that redaction empties becomes `[redacted]`. The hash is of the raw task.
 pub fn task_title(task: &str) -> String {
     let line = task.lines().next().unwrap_or("");
     let stripped: String = line.chars().filter(|ch| !ch.is_control()).collect();
-    let redacted = redact(&stripped);
-    if redacted.is_empty() && !stripped.is_empty() {
-        return "[redacted]".to_string();
-    }
-    cut_display(&redacted)
+    cut_display(&redact(&stripped))
 }
 
 pub fn redact_value(value: &Value) -> Value {

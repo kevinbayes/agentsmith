@@ -160,6 +160,7 @@ fn block_on(
         });
         let mut run = std::pin::pin!(run);
         let mut reporter = None;
+        let mut finished = None;
         let grace = pending.as_ref().map(|pending| pending.grace);
         if let Some(pending) = pending {
             let PendingReport {
@@ -172,12 +173,17 @@ fn block_on(
             } = pending;
             // A run can send `ready` and finish inside one poll. The biased
             // branch would miss that signal, so check the channel again.
-            let ready = tokio::select! {
+            // The run arm completes the future; polling it again panics.
+            let signaled = tokio::select! {
                 biased;
                 result = &mut ready => result.is_ok(),
-                _ = &mut run => ready.try_recv().is_ok(),
+                result = &mut run => {
+                    let signaled = ready.try_recv().is_ok();
+                    finished = Some(result);
+                    signaled
+                }
             };
-            if ready {
+            if signaled {
                 reporter = reporter::start(reporter::Parts {
                     config,
                     mode: agentsmith_protocol::ProcessMode::Foreground,
@@ -188,7 +194,10 @@ fn block_on(
                 });
             }
         }
-        let result = run.await;
+        let result = match finished {
+            Some(result) => result,
+            None => run.await,
+        };
         if let Some(reporter) = reporter {
             let deadline = Instant::now() + grace.unwrap_or_default();
             reporter.shutdown(deadline).await;

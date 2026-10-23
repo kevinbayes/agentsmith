@@ -728,9 +728,21 @@ fn scrub_encode(report: &ahsp::StateReport, secrets: &[String]) -> String {
 fn scrub(body: &str, secrets: &[String]) -> String {
     let mut out = redact(body);
     for secret in secrets {
-        if secret.len() >= 8 {
-            out = out.replace(secret, "[redacted]");
+        if secret.len() < 8 {
+            continue;
         }
+        // serde_json writes `"` as `\"`, so the raw secret is not a substring.
+        if let Ok(encoded) = serde_json::to_string(secret) {
+            if let Some(escaped) = encoded
+                .strip_prefix('"')
+                .and_then(|text| text.strip_suffix('"'))
+            {
+                if escaped != secret {
+                    out = out.replace(escaped, "[redacted]");
+                }
+            }
+        }
+        out = out.replace(secret, "[redacted]");
     }
     out
 }
@@ -1110,7 +1122,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use agentsmith_core::redact::task_title;
+    use agentsmith_core::redact::{cut_display, redact, task_title};
     use agentsmith_protocol::{ProcessWatch, RunningInstance};
     use agentsmith_runtime::{LoopMode, Phase, RunStatus};
     use serde_json::json;
@@ -1264,7 +1276,7 @@ mod tests {
                     running_instances: vec![RunningInstance {
                         pid: 9,
                         name: "tool".into(),
-                        cmd_summary: host_watch::cmd_summary(&format!("tool --flag {secret}")),
+                        cmd_summary: cut_display(&redact(&format!("tool --flag {secret}"))),
                     }],
                 }],
             },
@@ -1280,6 +1292,65 @@ mod tests {
         };
         let body = scrub_encode(&report, &known_secrets(&config));
         assert!(!body.contains(secret), "{body}");
+        assert!(body.contains("[redacted]"), "{body}");
+    }
+
+    #[test]
+    fn quoted_secret_is_absent_including_its_json_escape() {
+        let secret = "correct\"horse";
+        let mut config = Config::default();
+        config.reporter.client_secret = secret.to_string();
+        config.harness.workdir = std::path::PathBuf::from("/tmp/agentsmith-report");
+        config.harness.data_dir = std::path::PathBuf::from("/tmp/agentsmith-report");
+        let mut run = snap(1, None, 1, RunStatus::Running, 1, None);
+        run.task_title = task_title(&format!("{secret}\nrest"));
+        let (chosen, _) = select_runs(&[run]);
+        let (report_run, _) = to_report(&chosen[0], &mut false);
+        let report = ahsp::StateReport {
+            protocol: ahsp::ProtocolId,
+            report_id: agentsmith_core::id::new_id(),
+            sequence: 1,
+            sent_at: Utc::now(),
+            harness: ahsp::HarnessIdentity {
+                instance_id: agentsmith_core::id::new_id(),
+                name: "box".into(),
+                version: "0.1.0".into(),
+                pid: 1,
+                process_mode: ahsp::ProcessMode::Foreground,
+                uptime_secs: 1,
+                stopping: false,
+                config_fingerprint: "0123456789ab".into(),
+            },
+            host: ahsp::HostState {
+                hostname: "box".into(),
+                os: "linux".into(),
+                arch: "x86_64".into(),
+                processes: vec![ProcessWatch {
+                    name: "tool".into(),
+                    binary: "tool".into(),
+                    installed: true,
+                    version: None,
+                    path: None,
+                    running_instances: vec![RunningInstance {
+                        pid: 9,
+                        name: "tool".into(),
+                        cmd_summary: cut_display(&redact(&format!("tool --flag {secret}"))),
+                    }],
+                }],
+            },
+            runs: vec![report_run],
+            tools: Vec::new(),
+            mcp_servers: Vec::new(),
+            limits: ahsp::LimitsReport {
+                max_subagent_depth: 1,
+                max_fanout: 1,
+                live_subagents: 0,
+            },
+            truncated: false,
+        };
+        let body = scrub_encode(&report, &known_secrets(&config));
+        assert!(!body.contains(secret), "{body}");
+        assert!(!body.contains("correct\\\"horse"), "{body}");
         assert!(body.contains("[redacted]"), "{body}");
     }
 

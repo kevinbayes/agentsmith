@@ -132,15 +132,15 @@ impl SpawnHub {
 struct LiveSlots {
     current: AtomicUsize,
     max: usize,
-    on_change: Arc<dyn Fn(isize) + Send + Sync>,
+    events: Arc<dyn RunEvents>,
 }
 
 impl LiveSlots {
-    fn new(max: usize, on_change: Arc<dyn Fn(isize) + Send + Sync>) -> Self {
+    fn new(max: usize, events: Arc<dyn RunEvents>) -> Self {
         Self {
             current: AtomicUsize::new(0),
             max,
-            on_change,
+            events,
         }
     }
 
@@ -164,7 +164,7 @@ impl LiveSlots {
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    (self.on_change)(n as isize);
+                    self.events.adjust_live(n as isize);
                     return true;
                 }
                 Err(observed) => current = observed,
@@ -178,7 +178,7 @@ impl LiveSlots {
         }
         let prev = self.current.fetch_sub(n, Ordering::AcqRel);
         debug_assert!(prev >= n, "live_subagents released twice");
-        (self.on_change)(-(n as isize));
+        self.events.adjust_live(-(n as isize));
     }
 }
 
@@ -220,11 +220,11 @@ pub struct SubagentSpawner {
 
 impl SubagentSpawner {
     pub fn new(config: SpawnerConfig) -> Arc<Self> {
-        let on_events = Arc::clone(&config.events);
-        let on_change: Arc<dyn Fn(isize) + Send + Sync> =
-            Arc::new(move |delta| on_events.adjust_live(delta));
         Arc::new(Self {
-            live: Arc::new(LiveSlots::new(config.limits.max_live_subagents, on_change)),
+            live: Arc::new(LiveSlots::new(
+                config.limits.max_live_subagents,
+                Arc::clone(&config.events),
+            )),
             registry: config.registry,
             llm: config.llm,
             model: config.model,

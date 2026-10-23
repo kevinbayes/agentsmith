@@ -34,7 +34,7 @@ pub(crate) async fn sample(watch: &[HostWatch]) -> (Vec<ProcessWatch>, bool) {
                 instances.push(RunningInstance {
                     pid: proc.pid,
                     name: take_chars(&proc.name, 64).to_string(),
-                    cmd_summary: cmd_summary(&proc.cmd),
+                    cmd_summary: cut_display(&redact(&proc.cmd)),
                 });
             }
         }
@@ -50,10 +50,6 @@ pub(crate) async fn sample(watch: &[HostWatch]) -> (Vec<ProcessWatch>, bool) {
         });
     }
     (processes, truncated)
-}
-
-pub(crate) fn cmd_summary(argv: &str) -> String {
-    cut_display(&redact(argv))
 }
 
 struct Located {
@@ -134,10 +130,14 @@ fn is_exec(path: &Path) -> bool {
 async fn version_of(path: &Path) -> Option<String> {
     let mut cmd = tokio::process::Command::new(path);
     cmd.arg("--version")
+        .env_clear()
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    if let Some(path_env) = std::env::var_os("PATH") {
+        cmd.env("PATH", path_env);
+    }
     let finished = tokio::time::timeout(VERSION_TIMEOUT, cmd.output()).await;
     let output = match finished {
         Ok(Ok(output)) if output.status.success() => output,

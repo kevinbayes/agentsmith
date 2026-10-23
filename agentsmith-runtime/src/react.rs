@@ -20,6 +20,8 @@ impl ReactLoop {
 
 async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
     let events = Arc::clone(&ctx.events);
+    ctx.transcript
+        .arm_unwind(Arc::clone(&events), ctx.run_id, Phase::React);
     let llm = Arc::clone(&ctx.llm);
     let cancel = ctx.cancel.clone();
 
@@ -360,7 +362,7 @@ fn llm_tool(def: agentsmith_tools::ToolDefinition) -> ToolDefinition {
     }
 }
 
-fn llm_error_kind(kind: LlmErrorKind) -> &'static str {
+pub(crate) fn llm_error_kind(kind: LlmErrorKind) -> &'static str {
     match kind {
         LlmErrorKind::Auth => "auth",
         LlmErrorKind::BadRequest => "bad_request",
@@ -377,12 +379,18 @@ async fn stop(
     error_kind: Option<&str>,
     iteration: u32,
 ) -> Result<RunOutcome, Error> {
-    ctx.transcript
-        .finish(status, error_kind, iteration, Phase::React)?;
-    let error_kind = error_kind.map(str::to_string);
-    events
-        .finished(ctx.run_id, status, error_kind.clone())
+    let (status, error_kind) = events
+        .finished(ctx.run_id, status, error_kind.map(str::to_string))
         .await;
+    if let Err(err) = ctx
+        .transcript
+        .finish(status, error_kind.as_deref(), iteration, Phase::React)
+    {
+        eprintln!(
+            "agentsmith: jsonl finish append failed for run {}: {err}",
+            ctx.run_id
+        );
+    }
     Ok(RunOutcome {
         status,
         summary: summary.into(),

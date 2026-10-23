@@ -30,12 +30,6 @@ const SUMMARY_MAX: usize = 4 * 1024;
 const ERROR_MAX: usize = 512;
 const TIMEOUT_MAX_SECS: u64 = 600;
 
-/// v1 constructs only `All`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum JoinPolicy {
-    All,
-}
-
 /// Who asked for the join. The depth on the request is already the child's depth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChildOrigin {
@@ -73,7 +67,6 @@ pub struct ChildOutcome {
 }
 
 pub struct JoinOutcome {
-    pub policy: JoinPolicy,
     pub agents: Vec<ChildOutcome>,
 }
 
@@ -237,6 +230,10 @@ impl SubagentSpawner {
                 "spawn_subagents fan-out is outside 1..=max_fanout",
             ));
         }
+        // Already cancelled: do not take a slot and do not start a child.
+        if request.cancel.is_cancelled() {
+            return Err(cancelled_error());
+        }
         let kind = match request.origin {
             ChildOrigin::Step => RunKind::Step,
             ChildOrigin::Spawned => RunKind::Spawned,
@@ -257,6 +254,9 @@ impl SubagentSpawner {
                 max_subagent_depth: self.limits.max_subagent_depth,
             },
         )?;
+        if request.cancel.is_cancelled() {
+            return Err(cancelled_error());
+        }
         if !self.live.try_acquire(n) {
             return Err(limit_error("live_subagents limit"));
         }
@@ -274,6 +274,9 @@ impl SubagentSpawner {
         let (tx, mut rx) = mpsc::channel(n);
         let mut children = Vec::with_capacity(n);
         for (index, agent) in request.agents.into_iter().enumerate() {
+            if request.cancel.is_cancelled() {
+                break;
+            }
             let run_id = agentsmith_core::id::new_id();
             let cancel = request.cancel.child_token();
             let spec = child_spec(
@@ -295,6 +298,13 @@ impl SubagentSpawner {
                     },
                 )
                 .await;
+            // `started` awaits, so cancel can land after admission and before the task exists.
+            if request.cancel.is_cancelled() {
+                self.events
+                    .finished(run_id, RunStatus::Cancelled, None)
+                    .await;
+                break;
+            }
             let ctx = RunContext {
                 run_id,
                 parent_run_id: Some(request.parent),
@@ -325,7 +335,7 @@ impl SubagentSpawner {
                 let mut report = Report {
                     tx: sender,
                     index,
-                    outcome: panic_outcome(&name, run_id),
+                    outcome: failed_outcome(&name, run_id, "panic", "subagent task panicked"),
                 };
                 let outcome = run_child(ctx, &data_dir, &events).await;
                 report.outcome = outcome;
@@ -342,7 +352,12 @@ impl SubagentSpawner {
             hold.left -= 1;
         }
         drop(tx);
-        hold.left = 0;
+        // Slots never handed to a child. Spawned children release their own.
+        drop(hold);
+
+        if children.is_empty() {
+            return Err(cancelled_error());
+        }
 
         self.await_children(
             &mut children,
@@ -367,10 +382,7 @@ impl SubagentSpawner {
                 })
             })
             .collect();
-        Ok(JoinOutcome {
-            policy: JoinPolicy::All,
-            agents,
-        })
+        Ok(JoinOutcome { agents })
     }
 
     async fn await_children(
@@ -456,7 +468,6 @@ impl SubagentSpawner {
                 continue;
             }
             let outcome = match kind {
-                // Grace expired after the join clock. Still-running siblings are timed_out.
                 DetachKind::Timeout => ChildOutcome {
                     name: child.name.clone(),
                     run_id: child.run_id,
@@ -568,17 +579,6 @@ fn last_assistant(transcript: &[agentsmith_llm::Message]) -> String {
             _ => None,
         })
         .unwrap_or_default()
-}
-
-fn panic_outcome(name: &str, run_id: RunId) -> ChildOutcome {
-    ChildOutcome {
-        name: name.to_string(),
-        run_id,
-        status: RunStatus::Failed,
-        summary: String::new(),
-        error_kind: Some("panic".to_string()),
-        error_message: Some(redacted_message("subagent task panicked")),
-    }
 }
 
 fn failed_outcome(name: &str, run_id: RunId, kind: &str, message: &str) -> ChildOutcome {
@@ -751,6 +751,14 @@ fn limit_error(message: &str) -> Error {
     }
 }
 
+fn cancelled_error() -> Error {
+    Error::Tool {
+        tool: SPAWN_SUBAGENTS.to_string(),
+        kind: ToolErrorKind::Cancelled,
+        message: "cancelled".into(),
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|err| err.into_inner())
 }
@@ -772,7 +780,7 @@ struct SpawnArgs {
     #[serde(default)]
     timeout_secs: Option<u64>,
     #[serde(default)]
-    failure_policy: Option<String>,
+    failure_policy: Option<FailurePolicy>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -861,17 +869,7 @@ impl Tool for SpawnSubagents {
             Some(secs) => Duration::from_secs(secs),
             None => spawner.limits.spawn_timeout,
         };
-        let failure_policy = match args.failure_policy.as_deref() {
-            None => spawner.limits.failure_policy,
-            Some("continue") => FailurePolicy::Continue,
-            Some("fail_fast") => FailurePolicy::FailFast,
-            Some(_) => {
-                return Err(tool_error(
-                    ToolErrorKind::InvalidArgs,
-                    "failure_policy must be continue or fail_fast",
-                ))
-            }
-        };
+        let failure_policy = args.failure_policy.unwrap_or(spawner.limits.failure_policy);
         let agents = args
             .agents
             .into_iter()

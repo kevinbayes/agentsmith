@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use agentsmith_core::{Error, LlmErrorKind};
+use agentsmith_core::Error;
 use agentsmith_llm::{CompletionRequest, Message, ToolChoice, ToolDefinition};
 use serde_json::{json, Value};
 
@@ -34,8 +34,6 @@ enum StepPhase {
     Pending,
     Running,
     Skipped,
-    /// Not started. Root cancel uses this. It is not a [`RunStatus`].
-    NotStartedCancelled,
     Done(RunStatus),
 }
 
@@ -56,6 +54,8 @@ struct Plan {
 
 async fn execute(mut ctx: RunContext) -> Result<RunOutcome, Error> {
     let events = Arc::clone(&ctx.events);
+    ctx.transcript
+        .arm_unwind(Arc::clone(&events), ctx.run_id, Phase::Plan);
     let cancel = ctx.cancel.clone();
     let spawner = ctx
         .spawner
@@ -154,7 +154,7 @@ async fn plan_phase(
                             events,
                             RunStatus::Failed,
                             message,
-                            Some(llm_error_kind(kind)),
+                            Some(crate::react::llm_error_kind(kind)),
                         )
                         .await?,
                     ));
@@ -226,7 +226,6 @@ async fn walk(
     let mut steps = plan.steps;
     loop {
         if cancel.is_cancelled() {
-            cancel_unstarted(&mut steps);
             return stop(ctx, events, RunStatus::Cancelled, "cancelled", None).await;
         }
         apply_skips(&mut steps);
@@ -312,6 +311,10 @@ async fn walk(
                 }
                 return stop(ctx, events, RunStatus::Failed, message, Some("limit")).await;
             }
+            Err(Error::Tool {
+                kind: agentsmith_core::ToolErrorKind::Cancelled,
+                ..
+            }) => return stop(ctx, events, RunStatus::Cancelled, "cancelled", None).await,
             Err(err) => return Err(err),
         };
         if joined.agents.len() != members.len() {
@@ -326,21 +329,7 @@ async fn walk(
         }
         events.phase(ctx.run_id, Phase::Plan).await;
         if cancel.is_cancelled() {
-            cancel_unstarted(&mut steps);
             return stop(ctx, events, RunStatus::Cancelled, "cancelled", None).await;
-        }
-    }
-}
-
-fn cancel_unstarted(steps: &mut [StepExec]) {
-    for step in steps.iter_mut() {
-        if step.run_id.is_none()
-            && matches!(
-                step.status,
-                StepPhase::Pending | StepPhase::Skipped | StepPhase::Running
-            )
-        {
-            step.status = StepPhase::NotStartedCancelled;
         }
     }
 }
@@ -468,7 +457,6 @@ fn phase_label(step: &StepExec) -> String {
         StepPhase::Pending => "pending".to_string(),
         StepPhase::Running => "running".to_string(),
         StepPhase::Skipped => "skipped".to_string(),
-        StepPhase::NotStartedCancelled => "cancelled".to_string(),
         StepPhase::Done(status) => status.label().to_string(),
     }
 }
@@ -496,9 +484,6 @@ fn step_task(steps: &[StepExec], index: usize) -> String {
                         out.push('\n');
                     }
                 }
-            }
-            StepPhase::NotStartedCancelled => {
-                out.push_str(&format!("- {id}: cancelled\n"));
             }
             StepPhase::Pending | StepPhase::Running => {}
         }
@@ -653,18 +638,47 @@ fn oversized_group(steps: &[StepExec], max_fanout: usize) -> Option<String> {
 }
 
 fn intra_group_edge(steps: &[StepExec]) -> Option<String> {
-    for step in steps {
-        let Some(group) = &step.parallel_group else {
+    for (start, step) in steps.iter().enumerate() {
+        let Some(group) = step.parallel_group.as_deref() else {
             continue;
         };
-        for dep in &step.depends_on {
-            let same = steps.iter().any(|other| {
-                other.id == *dep && other.parallel_group.as_deref() == Some(group.as_str())
-            });
-            if same {
-                return Some(format!(
-                    "depends_on \"{dep}\" stays inside parallel_group \"{group}\""
-                ));
+        // Follow depends_on only. An edge between every group member would
+        // reject a legal parallel group as a cycle.
+        let Some(hit) = reaches_group_member(steps, start, group) else {
+            continue;
+        };
+        if step.depends_on.iter().any(|dep| dep == &hit) {
+            return Some(format!(
+                "depends_on \"{hit}\" stays inside parallel_group \"{group}\""
+            ));
+        }
+        return Some(format!(
+            "step \"{}\" reaches \"{hit}\" inside parallel_group \"{group}\"",
+            step.id
+        ));
+    }
+    None
+}
+
+fn reaches_group_member(steps: &[StepExec], start: usize, group: &str) -> Option<String> {
+    let mut stack = Vec::new();
+    for dep in &steps[start].depends_on {
+        if let Some(index) = steps.iter().position(|candidate| candidate.id == *dep) {
+            stack.push(index);
+        }
+    }
+    let mut seen = vec![false; steps.len()];
+    while let Some(index) = stack.pop() {
+        if seen[index] {
+            continue;
+        }
+        seen[index] = true;
+        if steps[index].parallel_group.as_deref() == Some(group) {
+            return Some(steps[index].id.clone());
+        }
+        for dep in &steps[index].depends_on {
+            if let Some(next) = steps.iter().position(|candidate| candidate.id == *dep) {
+                stack.push(next);
             }
         }
     }
@@ -748,15 +762,6 @@ fn submit_plan_definition() -> ToolDefinition {
     }
 }
 
-fn llm_error_kind(kind: LlmErrorKind) -> &'static str {
-    match kind {
-        LlmErrorKind::Auth => "auth",
-        LlmErrorKind::BadRequest => "bad_request",
-        LlmErrorKind::Unavailable => "unavailable",
-        LlmErrorKind::Timeout => "timeout",
-    }
-}
-
 async fn stop(
     ctx: &mut RunContext,
     events: &Arc<dyn RunEvents>,
@@ -764,11 +769,18 @@ async fn stop(
     summary: impl Into<String>,
     error_kind: Option<&str>,
 ) -> Result<RunOutcome, Error> {
-    ctx.transcript.finish(status, error_kind, 0, Phase::Plan)?;
-    let error_kind = error_kind.map(str::to_string);
-    events
-        .finished(ctx.run_id, status, error_kind.clone())
+    let (status, error_kind) = events
+        .finished(ctx.run_id, status, error_kind.map(str::to_string))
         .await;
+    if let Err(err) = ctx
+        .transcript
+        .finish(status, error_kind.as_deref(), 0, Phase::Plan)
+    {
+        eprintln!(
+            "agentsmith: jsonl finish append failed for run {}: {err}",
+            ctx.run_id
+        );
+    }
     Ok(RunOutcome {
         status,
         summary: summary.into(),
@@ -845,6 +857,19 @@ mod tests {
         });
         let Err(err) = validate_plan(&edge, 8) else {
             panic!("expected an intra-group edge to be rejected");
+        };
+        assert!(err.contains("parallel_group"), "{err}");
+
+        let indirect = json!({
+            "goal": "g",
+            "steps": [
+                {"id": "c", "title": "t", "instruction": "i", "parallel_group": "g"},
+                {"id": "b", "title": "t", "instruction": "i", "depends_on": ["c"]},
+                {"id": "a", "title": "t", "instruction": "i", "parallel_group": "g", "depends_on": ["b"]}
+            ]
+        });
+        let Err(err) = validate_plan(&indirect, 8) else {
+            panic!("expected an indirect group dependency to be rejected");
         };
         assert!(err.contains("parallel_group"), "{err}");
 

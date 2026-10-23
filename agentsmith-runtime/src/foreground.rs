@@ -54,19 +54,27 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
         events: Arc::clone(&events),
     });
     spawner.install()?;
-    if params.spec.subagent_tools.is_some() {
-        // A name outside the parent view fails the run before any step starts.
-        RunTools::resolve_for(
+    if let Some(names) = params.spec.subagent_tools.as_deref() {
+        // The step view, after the depth drop. A spawned view at depth 1 still
+        // lists spawn_subagents when max_subagent_depth is 0.
+        let step_view = RunTools::resolve_for(
             registry.clone(),
             ToolFilter {
                 allow: allow.as_deref(),
                 spec_tools: params.spec.tools.as_deref(),
-                subagent_tools: params.spec.subagent_tools.as_deref(),
-                kind: RunKind::Spawned,
-                depth: 1,
+                subagent_tools: None,
+                kind: RunKind::Step,
+                depth: 0,
                 max_subagent_depth: limits.max_subagent_depth,
             },
         )?;
+        for name in names {
+            if step_view.get(name).is_none() {
+                return Err(Error::Config(format!(
+                    "spec.subagent_tools includes \"{name}\", which is not available"
+                )));
+            }
+        }
     }
     let tools = RunTools::resolve(registry, allow.as_deref(), params.spec.tools.as_deref())?;
     let run_id = agentsmith_core::id::new_id();

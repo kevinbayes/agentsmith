@@ -150,5 +150,19 @@ pub trait RunEvents: Send + Sync {
     async fn phase(&self, run: RunId, phase: Phase);
     async fn iteration(&self, run: RunId, n: u32);
     async fn tool_used(&self, run: RunId, name: &str);
-    async fn finished(&self, run: RunId, status: RunStatus, error_kind: Option<String>);
+    /// First terminal status wins. The return value is the status that stuck,
+    /// so a late caller can write that status instead of a second one.
+    async fn finished(
+        &self,
+        run: RunId,
+        status: RunStatus,
+        error_kind: Option<String>,
+    ) -> (RunStatus, Option<String>);
+    /// Same rule as [`Self::finished`], for a `Drop` during unwind that cannot await.
+    fn record_terminal(
+        &self,
+        run: RunId,
+        status: RunStatus,
+        error_kind: Option<String>,
+    ) -> (RunStatus, Option<String>);
 }

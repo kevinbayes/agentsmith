@@ -103,11 +103,20 @@ struct SleepyLlm {
     delay: Duration,
 }
 
+struct PanickyLlm;
+
 #[async_trait::async_trait]
 impl Llm for SleepyLlm {
     async fn complete(&self, _request: CompletionRequest) -> Result<Completion, Error> {
         tokio::time::sleep(self.delay).await;
         Ok(end_completion("late"))
+    }
+}
+
+#[async_trait::async_trait]
+impl Llm for PanickyLlm {
+    async fn complete(&self, _request: CompletionRequest) -> Result<Completion, Error> {
+        panic!("boom");
     }
 }
 
@@ -361,6 +370,21 @@ fn systems(seen: &Seen) -> String {
 
 fn cleanup(dir: PathBuf) {
     let _ = std::fs::remove_dir_all(dir);
+}
+
+fn finished_events(dir: &std::path::Path, run_id: RunId) -> Vec<Value> {
+    let path = dir
+        .join("data")
+        .join("runs")
+        .join(format!("{run_id}.jsonl"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{path:?}: {err}"));
+    text.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap_or_else(|err| panic!("{line}: {err}"))
+        })
+        .filter(|value| value.get("event").and_then(Value::as_str) == Some("finished"))
+        .collect()
 }
 
 const REPAIR: &str = "The previous response was not a valid submit_plan call. Call submit_plan with a JSON object matching the schema. Do not explain.";
@@ -620,6 +644,44 @@ async fn depends_on_inside_a_parallel_group_is_plan_invalid() {
 }
 
 #[tokio::test]
+async fn an_indirect_parallel_group_dependency_spends_the_repair_attempt() {
+    let world = harness(
+        spec(),
+        base_limits(),
+        vec![
+            plan(vec![
+                step_group("c", "do c", "g"),
+                step_dep("b", "do b", &["c"]),
+                json!({
+                    "id": "a",
+                    "title": "a",
+                    "instruction": "do a",
+                    "parallel_group": "g",
+                    "depends_on": ["b"]
+                }),
+            ]),
+            plan(vec![step("a", "do a")]),
+            end("done"),
+        ],
+    );
+    let outcome = run_plan(&world).await;
+    assert_eq!(outcome.status, RunStatus::Succeeded, "{}", outcome.summary);
+    let seen = world.llm.seen();
+    assert_eq!(seen.len(), 3);
+    assert!(users(&seen[1]).contains(REPAIR), "{}", users(&seen[1]));
+    assert!(
+        users(&seen[1]).contains("parallel_group"),
+        "{}",
+        users(&seen[1])
+    );
+    let kids = children(&world);
+    assert_eq!(kids.len(), 1, "{kids:?}");
+    assert_eq!(kids[0].name, "a");
+    assert_eq!(kids[0].status, RunStatus::Succeeded);
+    cleanup(world.dir);
+}
+
+#[tokio::test]
 async fn planner_repair_then_plan_invalid_on_the_second_failure() {
     let world = harness(
         spec(),
@@ -809,6 +871,62 @@ async fn depth_past_max_starts_zero_children_and_returns_limit() {
 }
 
 #[tokio::test]
+async fn a_pre_cancelled_token_does_not_spawn_or_take_a_slot() {
+    let world = harness(spec(), base_limits(), Vec::new());
+    let run_id = agentsmith_core::id::new_id();
+    let _guard = world.spawner.enter(run_id, 0, "sys".into());
+    let before = world.spawner.live();
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let err = match world
+        .spawner
+        .spawn_and_join(SpawnRequest {
+            parent: run_id,
+            child_depth: 1,
+            agents: vec![ChildSpec {
+                name: "a".into(),
+                task: "t".into(),
+                context: None,
+            }],
+            timeout: Duration::from_secs(30),
+            failure_policy: FailurePolicy::Continue,
+            cancel: cancel.clone(),
+            origin: ChildOrigin::Spawned,
+        })
+        .await
+    {
+        Err(err) => err,
+        Ok(_) => panic!("expected a cancelled spawn to start nothing"),
+    };
+    match err {
+        Error::Tool { kind, .. } => assert_eq!(kind, ToolErrorKind::Cancelled),
+        other => panic!("{other}"),
+    }
+    assert_eq!(world.spawner.live(), before);
+    assert!(world.supervisor.snapshots().is_empty());
+
+    let tool = world.registry.get("spawn_subagents").unwrap();
+    let err = tool
+        .call(
+            ToolCtx {
+                run_id,
+                workdir: world.dir.clone(),
+                cancel,
+            },
+            json!({"agents": [{"name": "a", "task": "t"}]}),
+        )
+        .await
+        .unwrap_err();
+    match err {
+        Error::Tool { kind, .. } => assert_eq!(kind, ToolErrorKind::Cancelled),
+        other => panic!("{other}"),
+    }
+    assert_eq!(world.spawner.live(), before);
+    assert!(world.supervisor.snapshots().is_empty());
+    cleanup(world.dir);
+}
+
+#[tokio::test]
 async fn fanout_and_live_caps_start_zero_children() {
     let mut limits = base_limits();
     limits.max_fanout = 1;
@@ -981,6 +1099,39 @@ async fn subagent_tools_cannot_grant_and_foreground_rejects_it_at_start() {
 }
 
 #[tokio::test]
+async fn subagent_tools_spawn_fails_before_a_step_when_depth_drops_it() {
+    let dir = scratch();
+    let mut spec = AgentSpec::react_default();
+    spec.subagent_tools = Some(vec!["spawn_subagents".into()]);
+    let err = match run_foreground(ForegroundParams {
+        task: "ship".into(),
+        spec,
+        config: {
+            let mut config = Config::default();
+            config.harness.data_dir = dir.join("data");
+            config.harness.workdir = dir.clone();
+            config.loop_.max_subagent_depth = 0;
+            config.tools.shell.enabled = Some(false);
+            config
+        },
+        model: "m".into(),
+        workdir: dir.clone(),
+        llm: QueueLlm::new(Vec::new(), CancellationToken::new()),
+        cancel: CancellationToken::new(),
+        mode: LoopMode::Plan,
+    })
+    .await
+    {
+        Err(err) => err,
+        Ok(_) => panic!("expected spawn_subagents to be rejected at depth 0"),
+    };
+    assert!(matches!(err, Error::Config(_)), "{err}");
+    assert!(err.to_string().contains("spawn_subagents"), "{err}");
+    assert!(!dir.join("data").join("runs").exists());
+    cleanup(dir);
+}
+
+#[tokio::test]
 async fn join_ok_is_true_only_when_every_child_succeeded() {
     let world = harness(
         spec(),
@@ -1089,5 +1240,79 @@ async fn a_child_that_ignores_cancel_releases_its_slot_after_grace() {
         supervisor.snapshot(run_id).unwrap().status,
         RunStatus::TimedOut
     );
+    let finished = finished_events(&dir, run_id);
+    assert_eq!(finished.len(), 1, "{finished:?}");
+    assert_eq!(finished[0]["status"], "timed_out");
+    assert_eq!(finished[0]["error_kind"], "timeout");
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn a_panicked_child_writes_one_terminal_finished_line() {
+    let dir = scratch();
+    let supervisor = Arc::new(Supervisor::new());
+    let limits = base_limits();
+    let spawner = SubagentSpawner::new(SpawnerConfig {
+        registry: ToolRegistry::new(),
+        llm: Arc::new(PanickyLlm),
+        model: "m".into(),
+        max_output_tokens: 32,
+        temperature: None,
+        max_output_bytes: 1024,
+        workdir: dir.clone(),
+        data_dir: dir.join("data"),
+        spec: spec(),
+        allow: None,
+        limits: limits.clone(),
+        events: supervisor.clone() as Arc<dyn RunEvents>,
+    });
+    spawner.install().unwrap();
+    let before = spawner.live();
+    let joined = match spawner
+        .spawn_and_join(SpawnRequest {
+            parent: agentsmith_core::id::new_id(),
+            child_depth: 0,
+            agents: vec![ChildSpec {
+                name: "panicker".into(),
+                task: "do the work".into(),
+                context: None,
+            }],
+            timeout: Duration::from_secs(5),
+            failure_policy: FailurePolicy::Continue,
+            cancel: CancellationToken::new(),
+            origin: ChildOrigin::Step,
+        })
+        .await
+    {
+        Ok(joined) => joined,
+        Err(err) => panic!("{err}"),
+    };
+    assert_eq!(joined.agents.len(), 1);
+    assert_eq!(joined.agents[0].status, RunStatus::Failed);
+    assert_eq!(joined.agents[0].error_kind.as_deref(), Some("panic"));
+    assert_eq!(
+        joined.agents[0].error_message.as_deref(),
+        Some("subagent task panicked")
+    );
+    assert!(!joined.agents[0]
+        .error_message
+        .as_deref()
+        .unwrap_or("")
+        .contains("boom"));
+    assert_eq!(spawner.live(), before);
+    let run_id = joined.agents[0].run_id;
+    let snap = supervisor.snapshot(run_id).unwrap();
+    assert_eq!(snap.status, RunStatus::Failed);
+    assert_eq!(snap.error_kind.as_deref(), Some("panic"));
+    let path = dir
+        .join("data")
+        .join("runs")
+        .join(format!("{run_id}.jsonl"));
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(!raw.contains("boom"), "{raw}");
+    let finished = finished_events(&dir, run_id);
+    assert_eq!(finished.len(), 1, "{finished:?}");
+    assert_eq!(finished[0]["status"], "failed");
+    assert_eq!(finished[0]["error_kind"], "panic");
     cleanup(dir);
 }

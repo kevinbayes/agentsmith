@@ -127,14 +127,28 @@ impl RunEvents for Supervisor {
         *state.tool_use.entry(name.to_string()).or_insert(0) += 1;
     }
 
-    async fn finished(&self, run: RunId, status: RunStatus, error_kind: Option<String>) {
+    async fn finished(
+        &self,
+        run: RunId,
+        status: RunStatus,
+        error_kind: Option<String>,
+    ) -> (RunStatus, Option<String>) {
+        self.record_terminal(run, status, error_kind)
+    }
+
+    fn record_terminal(
+        &self,
+        run: RunId,
+        status: RunStatus,
+        error_kind: Option<String>,
+    ) -> (RunStatus, Option<String>) {
         let mut runs = lock(&self.runs);
         let state = runs.entry(run).or_insert_with(RunState::running);
-        if state.status.is_terminal() {
-            return;
+        if !state.status.is_terminal() {
+            state.status = status;
+            state.error_kind = error_kind;
         }
-        state.status = status;
-        state.error_kind = error_kind;
+        (state.status, state.error_kind.clone())
     }
 }
 
@@ -182,7 +196,8 @@ mod tests {
         supervisor
             .finished(id, RunStatus::TimedOut, Some("timeout".into()))
             .await;
-        supervisor.finished(id, RunStatus::Cancelled, None).await;
+        let stuck = supervisor.finished(id, RunStatus::Cancelled, None).await;
+        assert_eq!(stuck, (RunStatus::TimedOut, Some("timeout".into())));
         supervisor.iteration(id, 4).await;
         let snap = supervisor.snapshot(id).unwrap();
         assert_eq!(snap.status, RunStatus::TimedOut);

@@ -227,9 +227,9 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
                 }
                 Some(_) if ctx.tools.get(&name).is_none() => {
                     consecutive_errors = consecutive_errors.saturating_add(1);
-                    // MCP poll drops a down server's tools. A name still in this
-                    // run's view is that server, not an unknown tool.
-                    let observation = if ctx.tools.unregistered(&name) {
+                    // `mcp_down` is only a server the supervisor marked down.
+                    // A re-list that drops a name leaves the server up.
+                    let observation = if ctx.tools.mcp_down(&name) {
                         observation_err("mcp_down", "mcp server down")
                     } else {
                         observation_err("not_found", format!("no such tool: {name}"))

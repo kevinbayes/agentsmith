@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use agentsmith_core::config::McpServerConfig;
 use agentsmith_core::{Error, ToolErrorKind};
 use agentsmith_mcp::{McpSupervisor, McpSupervisorConfig};
-use agentsmith_tools::{Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
+use agentsmith_tools::{SessionPoll, Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
@@ -41,6 +41,14 @@ struct Session {
 
 impl Session {
     async fn start(mode: &str, notify: bool, call_timeout_secs: u64) -> Self {
+        let session = Self::prepare(mode, notify, call_timeout_secs, false).await;
+        SessionPoll::poll(session.supervisor.as_ref())
+            .await
+            .unwrap();
+        session
+    }
+
+    async fn prepare(mode: &str, notify: bool, call_timeout_secs: u64, required: bool) -> Self {
         let dir = std::env::temp_dir().join(format!(
             "agentsmith-mcp-{}-{}",
             std::process::id(),
@@ -71,6 +79,7 @@ impl Session {
                 connect_timeout_secs: 5,
                 call_timeout_secs,
                 env,
+                required,
                 ..McpServerConfig::default()
             },
         );
@@ -81,7 +90,6 @@ impl Session {
             shutdown_grace: Duration::from_secs(15),
             cancel: CancellationToken::new(),
         });
-        supervisor.poll().await.unwrap();
         Self {
             dir,
             log,
@@ -209,7 +217,7 @@ async fn a_registered_name_wins_over_the_mcp_tool() {
         shutdown_grace: Duration::from_secs(15),
         cancel: CancellationToken::new(),
     });
-    supervisor.poll().await.unwrap();
+    SessionPoll::poll(supervisor.as_ref()).await.unwrap();
     assert_eq!(supervisor.tools_skipped("fs"), 4);
     assert_eq!(
         registry.get("fs__echo").unwrap().definition().description,
@@ -246,7 +254,35 @@ async fn a_registered_name_wins_over_the_mcp_tool() {
         "{text}"
     );
     assert!(text.contains("tools/call read_file"), "{text}");
+    let pid = supervisor.pid("fs").await.expect("recorded pid");
+    let status = std::process::Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    // Do not poll. poll would reconnect and the builtin must survive mark-down.
+    let (kind, message) = tool_err(
+        supervisor
+            .call(
+                "fs",
+                "echo",
+                json!({ "text": "hi" }),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(kind, ToolErrorKind::McpDown);
+    assert_eq!(message, "mcp server down");
+    assert_eq!(
+        registry.get("fs__echo").unwrap().definition().description,
+        "builtin"
+    );
     supervisor.shutdown().await.unwrap();
+    assert_eq!(
+        registry.get("fs__echo").unwrap().definition().description,
+        "builtin"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -313,7 +349,9 @@ async fn list_changed_replaces_the_server_tools() {
     assert!(session.registry.get("fs__echo").is_some());
     let mut replaced = false;
     for _ in 0..40 {
-        session.supervisor.poll().await.unwrap();
+        SessionPoll::poll(session.supervisor.as_ref())
+            .await
+            .unwrap();
         if session.registry.get("fs__echo2").is_some() && session.registry.get("fs__echo").is_none()
         {
             replaced = true;
@@ -344,4 +382,94 @@ async fn shutdown_closes_stdin_and_does_not_signal_at_two_seconds() {
     let log = session.log_text();
     assert!(log.contains("stdin-close"), "{log}");
     assert!(!log.contains("SIGTERM"), "{log}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preregistered_fs_echo_survives_a_failed_connect() {
+    let session = Session::prepare("fail-init", false, 5, false).await;
+    session
+        .registry
+        .register(Arc::new(Fixed {
+            name: "fs__echo".into(),
+            body: "builtin-wins".into(),
+        }))
+        .unwrap();
+    SessionPoll::poll(session.supervisor.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        !session.registry.is_mcp_down("fs__echo"),
+        "a tool this server never installed is not mcp_down"
+    );
+    assert_eq!(
+        session
+            .registry
+            .get("fs__echo")
+            .unwrap()
+            .definition()
+            .description,
+        "builtin"
+    );
+    let ctx = ToolCtx {
+        run_id: agentsmith_core::id::new_id(),
+        workdir: session.dir.clone(),
+        cancel: CancellationToken::new(),
+    };
+    let out = session
+        .registry
+        .get("fs__echo")
+        .unwrap()
+        .call(ctx, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(out.content, "builtin-wins");
+    session.supervisor.shutdown().await.unwrap();
+    assert!(session.registry.get("fs__echo").is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_list_timeout_marks_down_advances_backoff_and_shutdown_proceeds() {
+    let session = Session::prepare("hang-list", false, 1, true).await;
+    let started = Instant::now();
+    let err = tokio::time::timeout(
+        Duration::from_secs(5),
+        SessionPoll::poll(session.supervisor.as_ref()),
+    )
+    .await
+    .expect("poll wedged on tools/list")
+    .unwrap_err();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "list timeout took {:?}",
+        started.elapsed()
+    );
+    match err {
+        Error::Mcp { server, message } => {
+            assert_eq!(server, "fs");
+            assert!(message.contains("list timed out"), "{message}");
+        }
+        other => panic!("expected mcp error, got {other}"),
+    }
+    assert!(session.registry.get("fs__echo").is_none());
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        SessionPoll::poll(session.supervisor.as_ref()),
+    )
+    .await
+    .expect("second poll wedged")
+    .unwrap();
+    let log = session.log_text();
+    assert_eq!(
+        log.lines().filter(|line| line.starts_with("pid ")).count(),
+        1,
+        "backoff should skip a second spawn: {log}"
+    );
+    assert!(log.contains("tools/list"), "{log}");
+    assert!(log.contains("stdin-close"), "{log}");
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(2), session.supervisor.shutdown())
+        .await
+        .expect("shutdown wedged")
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
 }

@@ -12,8 +12,6 @@ use rmcp::{ClientHandler, RoleClient, ServiceError, ServiceExt};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::client::{McpClient, McpSessionInfo};
-
 const FOLLOW_UP: &str = "mcp follow-up not supported";
 
 struct ToolListWatch {
@@ -50,7 +48,7 @@ struct Shared {
 /// Child process MCP session. Holds `RunningService` only: `serve` consumes
 /// the `TokioChildProcess`, and the pid is the value `id()` returned before that.
 #[derive(Clone)]
-pub struct StdioMcpClient {
+pub(crate) struct StdioMcpClient {
     shared: Arc<Shared>,
 }
 
@@ -143,11 +141,8 @@ impl StdioMcpClient {
             message: message.into(),
         }
     }
-}
 
-#[async_trait::async_trait]
-impl McpClient for StdioMcpClient {
-    async fn connect(&self) -> Result<McpSessionInfo, Error> {
+    pub(crate) async fn connect(&self) -> Result<(), Error> {
         if self.shared.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -187,33 +182,43 @@ impl McpClient for StdioMcpClient {
             Ok(Err(err)) => return Err(self.mcp(err.to_string())),
             Err(_) => return Err(self.mcp("connect timed out")),
         };
-        let version = service.peer_info().and_then(|info| {
-            info.server_info
-                .as_ref()
-                .map(|server| server.version.clone())
-        });
         {
             let mut inner = self.shared.inner.lock().await;
             inner.pid = pid;
             inner.service = Some(service);
         }
         *lock(&self.shared.changed) = changed;
-        Ok(McpSessionInfo {
-            server: self.shared.server.clone(),
-            server_version: version,
-            tool_count: 0,
-        })
+        Ok(())
     }
 
-    async fn list_tools(&self) -> Result<Vec<ToolDefinition>, Error> {
-        let listed = {
+    pub(crate) async fn list_tools(&self) -> Result<Vec<ToolDefinition>, Error> {
+        if self.shared.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let call_timeout = self.shared.call_timeout;
+        // The mutex guard lives in this future. Dropping it on cancel or timeout
+        // releases the session so shutdown can close the child.
+        let listed = async {
             let inner = self.shared.inner.lock().await;
             let Some(service) = inner.service.as_ref() else {
                 return Err(self.mcp("server is down"));
             };
-            service.list_all_tools().await
+            service
+                .list_all_tools()
+                .await
+                .map_err(|err| self.mcp(err.to_string()))
         };
-        let tools = listed.map_err(|err| self.mcp(err.to_string()))?;
+        let tools = tokio::select! {
+            biased;
+            _ = self.shared.cancel.cancelled() => {
+                return Err(Error::Cancelled);
+            }
+            result = tokio::time::timeout(call_timeout, listed) => result,
+        };
+        let tools = match tools {
+            Ok(result) => result?,
+            Err(_) => return Err(self.mcp("list timed out")),
+        };
         let defs = tools
             .iter()
             .map(|tool| ToolDefinition {
@@ -229,7 +234,7 @@ impl McpClient for StdioMcpClient {
         Ok(defs)
     }
 
-    async fn call(
+    pub(crate) async fn call(
         &self,
         name: &str,
         arguments: Value,
@@ -287,12 +292,6 @@ impl McpClient for StdioMcpClient {
         self.finish_call(name, response)
     }
 
-    async fn shutdown(&self) -> Result<(), Error> {
-        self.shutdown_within(self.shared.grace).await
-    }
-}
-
-impl StdioMcpClient {
     fn classify_call(&self, name: &str, err: ServiceError) -> Error {
         match err {
             ServiceError::TransportSend(_) | ServiceError::TransportClosed => {

@@ -10,7 +10,6 @@ use agentsmith_tools::{SessionPoll, Tool, ToolCtx, ToolDefinition, ToolOutput, T
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::client::McpClient;
 use crate::install_tools::{install_tools, PreparedTool};
 use crate::stdio::StdioMcpClient;
 
@@ -32,15 +31,15 @@ enum Status {
 }
 
 struct ServerSlot {
-    name: String,
     required: bool,
     client: StdioMcpClient,
     status: Status,
-    last_error: Option<String>,
     /// Next wait after a failed connect. Starts at 1s and doubles, capped at 300s.
     backoff: Duration,
     next_attempt: Option<Instant>,
     registered: BTreeSet<String>,
+    /// Names this server marked down. Cleared once the server is up again.
+    down_names: BTreeSet<String>,
     tools_skipped: u32,
 }
 
@@ -68,16 +67,15 @@ impl McpSupervisor {
                     config.cancel.clone(),
                 );
                 servers.insert(
-                    name.clone(),
+                    name,
                     ServerSlot {
-                        name,
                         required: server.required,
                         client,
                         status: Status::Down,
-                        last_error: None,
                         backoff: BACKOFF_START,
                         next_attempt: None,
                         registered: BTreeSet::new(),
+                        down_names: BTreeSet::new(),
                         tools_skipped: 0,
                     },
                 );
@@ -91,10 +89,6 @@ impl McpSupervisor {
                 first_poll: AtomicBool::new(true),
             }
         })
-    }
-
-    pub async fn poll(&self) -> Result<(), Error> {
-        self.poll_inner().await
     }
 
     /// Close every session, sharing one grace deadline. Later sessions get the remainder.
@@ -120,8 +114,7 @@ impl McpSupervisor {
         let mut servers = lock(&self.servers);
         for slot in servers.values_mut() {
             slot.status = Status::Down;
-            self.registry.unregister_prefix(&slot.name);
-            slot.registered.clear();
+            self.forget_installed(slot);
         }
         match first_error {
             Some(err) => Err(err),
@@ -156,8 +149,8 @@ impl McpSupervisor {
             slot.client.clone()
         };
         match client.call(tool, arguments, cancel).await {
-            Err(Error::Mcp { message, .. }) => {
-                self.mark_down(server, &message).await;
+            Err(Error::Mcp { .. }) => {
+                self.mark_down(server).await;
                 Err(tool_err(
                     &namespaced,
                     ToolErrorKind::McpDown,
@@ -183,30 +176,6 @@ impl McpSupervisor {
             .unwrap_or(0)
     }
 
-    pub fn last_error(&self, server: &str) -> Option<String> {
-        lock(&self.servers)
-            .get(server)
-            .and_then(|slot| slot.last_error.clone())
-    }
-
-    async fn poll_inner(&self) -> Result<(), Error> {
-        let _guard = self.poll_lock.lock().await;
-        let first = self.first_poll.swap(false, Ordering::AcqRel);
-        let names: Vec<String> = lock(&self.servers).keys().cloned().collect();
-        let mut required_error = None;
-        for name in names {
-            if let Err(err) = self.poll_server(&name).await {
-                if first && required_error.is_none() {
-                    required_error = Some(err);
-                }
-            }
-        }
-        match required_error {
-            Some(err) => Err(err),
-            None => Ok(()),
-        }
-    }
-
     async fn poll_server(&self, name: &str) -> Result<(), Error> {
         let (up, waiting, client) = {
             let servers = lock(&self.servers);
@@ -219,7 +188,7 @@ impl McpSupervisor {
         if up {
             if client.transport_dead().await {
                 // Do not arm backoff here. This poll still gets one connect attempt.
-                self.mark_down(name, "child exited").await;
+                self.mark_down(name).await;
                 return self.try_connect(name).await;
             }
             if client.take_list_changed() {
@@ -239,8 +208,9 @@ impl McpSupervisor {
                 self.install(name, defs);
                 Ok(())
             }
-            Err(err) => {
-                self.mark_down(name, &err.to_string()).await;
+            Err(Error::Cancelled) => Err(Error::Cancelled),
+            Err(_) => {
+                self.mark_down(name).await;
                 self.try_connect(name).await
             }
         }
@@ -255,12 +225,13 @@ impl McpSupervisor {
             (slot.client.clone(), slot.required)
         };
         match client.connect().await {
-            Ok(_) => match client.list_tools().await {
+            Ok(()) => match client.list_tools().await {
                 Ok(defs) => {
                     self.install(name, defs);
                     self.mark_up(name);
                     Ok(())
                 }
+                Err(Error::Cancelled) => Err(Error::Cancelled),
                 Err(err) => self.fail_connect(name, &err.to_string(), required).await,
             },
             Err(Error::Cancelled) => Err(Error::Cancelled),
@@ -277,12 +248,10 @@ impl McpSupervisor {
                 return Ok(());
             };
             slot.status = Status::Down;
-            slot.last_error = Some(message.clone());
             let wait = slot.backoff;
             slot.next_attempt = Some(Instant::now() + wait);
             slot.backoff = (slot.backoff * 2).min(BACKOFF_CAP);
-            self.registry.unregister_prefix(name);
-            slot.registered.clear();
+            self.forget_installed(slot);
             slot.client.clone()
         };
         let _ = client.shutdown_within(self.grace).await;
@@ -296,17 +265,14 @@ impl McpSupervisor {
         }
     }
 
-    async fn mark_down(&self, name: &str, message: &str) {
-        let message = redact(message);
+    async fn mark_down(&self, name: &str) {
         let client = {
             let mut servers = lock(&self.servers);
             let Some(slot) = servers.get_mut(name) else {
                 return;
             };
             slot.status = Status::Down;
-            slot.last_error = Some(message);
-            self.registry.unregister_prefix(name);
-            slot.registered.clear();
+            self.forget_installed(slot);
             slot.client.clone()
         };
         let _ = client.shutdown_within(self.grace).await;
@@ -318,9 +284,21 @@ impl McpSupervisor {
             return;
         };
         slot.status = Status::Up;
-        slot.last_error = None;
         slot.backoff = BACKOFF_START;
         slot.next_attempt = None;
+        let down = std::mem::take(&mut slot.down_names);
+        self.registry
+            .clear_mcp_down(down.iter().map(String::as_str));
+    }
+
+    /// Drop only the names this server installed. A colliding `{server}__*` tool
+    /// this server skipped stays registered.
+    fn forget_installed(&self, slot: &mut ServerSlot) {
+        for name in std::mem::take(&mut slot.registered) {
+            self.registry.mark_mcp_down(&name);
+            self.registry.unregister(&name);
+            slot.down_names.insert(name);
+        }
     }
 
     fn install(&self, name: &str, defs: Vec<ToolDefinition>) {
@@ -389,7 +367,21 @@ impl Tool for McpTool {
 #[async_trait::async_trait]
 impl SessionPoll for McpSupervisor {
     async fn poll(&self) -> Result<(), Error> {
-        self.poll_inner().await
+        let _guard = self.poll_lock.lock().await;
+        let first = self.first_poll.swap(false, Ordering::AcqRel);
+        let names: Vec<String> = lock(&self.servers).keys().cloned().collect();
+        let mut required_error = None;
+        for name in names {
+            if let Err(err) = self.poll_server(&name).await {
+                if first && required_error.is_none() {
+                    required_error = Some(err);
+                }
+            }
+        }
+        match required_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 }
 

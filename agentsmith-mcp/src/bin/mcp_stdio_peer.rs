@@ -93,6 +93,19 @@ fn main() -> ExitCode {
                 );
             }
             "ping" => write_result(&mut stdout, id, serde_json::json!({})),
+            "tools/list" if mode == "hang-list" => {
+                write_log(&mut log, "tools/list");
+                loop {
+                    line.clear();
+                    match lines.read_line(&mut line) {
+                        Ok(0) | Err(_) => {
+                            write_log(&mut log, "stdin-close");
+                            return ExitCode::SUCCESS;
+                        }
+                        Ok(_) => {}
+                    }
+                }
+            }
             "tools/list" => {
                 let tools = if lists == 0 {
                     tool_set(false)

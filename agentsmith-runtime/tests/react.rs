@@ -11,7 +11,7 @@ use agentsmith_runtime::{
     run_foreground, AgentSpec, CancellationToken, ForegroundParams, LoopLimits, LoopMode, Phase,
     ReactLoop, RunContext, RunOutcome, RunStatus, RunTools, Supervisor, Transcript,
 };
-use agentsmith_tools::{Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
+use agentsmith_tools::{SessionPoll, Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
 use serde_json::{json, Value};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -688,7 +688,7 @@ async fn a_hidden_registered_tool_is_not_called() {
 }
 
 #[tokio::test]
-async fn a_visible_tool_dropped_from_the_registry_is_mcp_down() {
+async fn a_name_removed_while_the_server_is_up_is_not_found() {
     let (tool, calls) = ScriptedTool::new("fs__echo", vec![Ok("secret".into())]);
     let llm = FakeLlm::new(vec![
         Step::Ok(assistant(
@@ -702,6 +702,7 @@ async fn a_visible_tool_dropped_from_the_registry_is_mcp_down() {
     let registry = ToolRegistry::new();
     registry.register(tool).unwrap();
     let tools = RunTools::resolve(registry.clone(), None, None).unwrap();
+    // A re-list drops the name without marking the server down.
     assert!(registry.unregister("fs__echo"));
     let outcome = ReactLoop
         .run(RunContext {
@@ -732,12 +733,132 @@ async fn a_visible_tool_dropped_from_the_registry_is_mcp_down() {
     assert_eq!(outcome.status, RunStatus::Succeeded);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     let obs = tool_json(&outcome.transcript, "c1");
-    assert_eq!(obs["error"]["kind"], json!("mcp_down"));
-    assert_eq!(obs["error"]["message"], json!("mcp server down"));
+    assert_eq!(obs["error"]["kind"], json!("not_found"));
+    assert_eq!(obs["error"]["message"], json!("no such tool: fs__echo"));
+    assert!(!llm.seen()[0]
+        .tool_names
+        .iter()
+        .any(|name| name == "fs__echo"));
     assert!(!llm.seen()[1]
         .tool_names
         .iter()
         .any(|name| name == "fs__echo"));
+}
+
+struct LivePoll {
+    registry: ToolRegistry,
+    step: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl SessionPoll for LivePoll {
+    async fn poll(&self) -> Result<(), Error> {
+        match self.step.fetch_add(1, Ordering::SeqCst) {
+            0 => Ok(()),
+            1 => {
+                assert!(self.registry.unregister("fs__echo"));
+                let (echo2, _) = ScriptedTool::new("fs__echo2", vec![Ok("next".into())]);
+                self.registry.register(echo2).unwrap();
+                Ok(())
+            }
+            2 => {
+                self.registry.mark_mcp_down("fs__echo2");
+                assert!(self.registry.unregister("fs__echo2"));
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_later_poll_updates_the_model_tools_and_mcp_down_stays_a_down_server() {
+    let (echo, echo_calls) = ScriptedTool::new("fs__echo", vec![Ok("hi".into())]);
+    let (spawn, spawn_calls) = ScriptedTool::new("spawn_subagents", vec![]);
+    let llm = FakeLlm::new(vec![
+        Step::Ok(assistant(
+            None,
+            vec![tool_call("c1", "fs__echo", Some(json!({})))],
+            StopReason::ToolUse,
+        )),
+        Step::Ok(assistant(
+            None,
+            vec![tool_call("c2", "fs__echo", Some(json!({})))],
+            StopReason::ToolUse,
+        )),
+        Step::Ok(assistant(
+            None,
+            vec![tool_call("c3", "fs__echo2", Some(json!({})))],
+            StopReason::ToolUse,
+        )),
+        Step::Ok(assistant(Some("done"), vec![], StopReason::EndTurn)),
+    ]);
+    let registry = ToolRegistry::new();
+    registry.register(echo).unwrap();
+    registry.register(spawn).unwrap();
+    let tools = RunTools::resolve(registry.clone(), None, None).unwrap();
+    let sessions: Arc<dyn SessionPoll> = Arc::new(LivePoll {
+        registry,
+        step: AtomicUsize::new(0),
+    });
+    let outcome = ReactLoop
+        .run(RunContext {
+            run_id: agentsmith_core::id::new_id(),
+            parent_run_id: None,
+            depth: 0,
+            name: "react".into(),
+            spec: AgentSpec::react_default(),
+            task: "ship the change".into(),
+            extra_context: None,
+            model: "spec-model".into(),
+            max_output_tokens: 64,
+            temperature: None,
+            max_output_bytes: 32 * 1024,
+            max_iterations: 6,
+            workdir: std::env::temp_dir(),
+            llm: llm.clone(),
+            tools,
+            limits: limits(6, 5),
+            cancel: CancellationToken::new(),
+            events: Arc::new(Supervisor::new()),
+            transcript: Transcript::empty(),
+            spawner: None,
+            sessions: Some(sessions),
+        })
+        .await
+        .unwrap();
+    assert_eq!(outcome.status, RunStatus::Succeeded);
+    assert_eq!(echo_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(spawn_calls.load(Ordering::SeqCst), 0);
+    let seen = llm.seen();
+    assert_eq!(seen[0].tool_names, ["fs__echo"]);
+    assert_eq!(
+        seen[1].tool_names,
+        ["fs__echo2"],
+        "a tool installed by a later poll is on the next model request"
+    );
+    assert!(
+        seen[2].tool_names.is_empty(),
+        "a down server's tool leaves the model list: {:?}",
+        seen[2].tool_names
+    );
+    for request in &seen {
+        assert!(
+            !request
+                .tool_names
+                .iter()
+                .any(|name| name == "spawn_subagents"),
+            "root still drops spawn_subagents: {:?}",
+            request.tool_names
+        );
+    }
+    assert_eq!(tool_json(&outcome.transcript, "c1")["ok"], json!(true));
+    let removed = tool_json(&outcome.transcript, "c2");
+    assert_eq!(removed["error"]["kind"], json!("not_found"));
+    assert_eq!(removed["error"]["message"], json!("no such tool: fs__echo"));
+    let down = tool_json(&outcome.transcript, "c3");
+    assert_eq!(down["error"]["kind"], json!("mcp_down"));
+    assert_eq!(down["error"]["message"], json!("mcp server down"));
 }
 
 #[tokio::test]

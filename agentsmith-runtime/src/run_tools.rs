@@ -24,11 +24,17 @@ pub struct ToolFilter<'a> {
     pub max_subagent_depth: u32,
 }
 
-/// Per-run view. `get` and `call` both refuse a name outside `visible`.
+/// Per-run filter. `definitions` and `get` apply it to the live registry.
 #[derive(Clone)]
 pub struct RunTools {
     registry: ToolRegistry,
-    visible: BTreeSet<String>,
+    allow: Option<Vec<String>>,
+    spec_tools: Option<Vec<String>>,
+    /// `Some` only narrows a [`RunKind::Spawned`] view. `None` inherits.
+    subagent_tools: Option<Vec<String>>,
+    kind: RunKind,
+    depth: u32,
+    max_subagent_depth: u32,
 }
 
 impl RunTools {
@@ -65,53 +71,79 @@ impl RunTools {
         let registered: BTreeSet<String> = registry.names().into_iter().collect();
         let mut visible = apply_allow(&registered, filter.allow)?;
         apply_spec(&mut visible, filter.spec_tools)?;
-        match filter.kind {
-            RunKind::Root => {
-                visible.remove(SPAWN_SUBAGENTS);
-            }
-            RunKind::Step => {
-                if filter.depth >= filter.max_subagent_depth {
-                    visible.remove(SPAWN_SUBAGENTS);
-                }
-            }
-            RunKind::Spawned => {
-                if let Some(names) = filter.subagent_tools {
-                    for name in names {
-                        if !visible.contains(name) {
-                            return Err(Error::Config(format!(
-                                "spec.subagent_tools includes \"{name}\", which is not available"
-                            )));
-                        }
-                    }
-                    visible.retain(|name| names.iter().any(|wanted| wanted == name));
-                }
-                if filter.depth >= filter.max_subagent_depth {
-                    visible.remove(SPAWN_SUBAGENTS);
+        if let (RunKind::Spawned, Some(names)) = (filter.kind, filter.subagent_tools) {
+            for name in names {
+                if !visible.contains(name) {
+                    return Err(Error::Config(format!(
+                        "spec.subagent_tools includes \"{name}\", which is not available"
+                    )));
                 }
             }
         }
-        Ok(Self { registry, visible })
+        // Kind rules run on each lookup. A tool registered after resolve is
+        // visible once it passes the same lists.
+        Ok(Self {
+            registry,
+            allow: filter.allow.map(|names| names.to_vec()),
+            spec_tools: filter.spec_tools.map(|names| names.to_vec()),
+            subagent_tools: filter.subagent_tools.map(|names| names.to_vec()),
+            kind: filter.kind,
+            depth: filter.depth,
+            max_subagent_depth: filter.max_subagent_depth,
+        })
     }
 
     /// Visible tools only, ordered by name.
     pub fn definitions(&self) -> Vec<ToolDefinition> {
-        self.visible
-            .iter()
-            .filter_map(|name| self.registry.get(name).map(|tool| tool.definition()))
+        self.registry
+            .names()
+            .into_iter()
+            .filter(|name| self.admits(name))
+            .filter_map(|name| self.registry.get(&name).map(|tool| tool.definition()))
             .collect()
     }
 
-    /// The run could see `name`, and poll has since dropped it from the registry.
-    pub fn unregistered(&self, name: &str) -> bool {
-        self.visible.contains(name) && self.registry.get(name).is_none()
+    /// The supervisor marked this server down. A re-list removal is not this,
+    /// and a name the filter hides stays `not_found`.
+    pub fn mcp_down(&self, name: &str) -> bool {
+        self.admits(name) && self.registry.is_mcp_down(name)
     }
 
-    /// `None` when `name` is not in the visible set, even if the process map has it.
+    /// `None` when `name` fails the filter, even if the process map has it.
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        if !self.visible.contains(name) {
+        if !self.admits(name) {
             return None;
         }
         self.registry.get(name)
+    }
+
+    fn admits(&self, name: &str) -> bool {
+        if let Some(allow) = &self.allow {
+            if !allow.iter().any(|item| item == name) {
+                return false;
+            }
+        }
+        if let Some(spec) = &self.spec_tools {
+            if !spec.is_empty() && !spec.iter().any(|item| item == name) {
+                return false;
+            }
+        }
+        if let (RunKind::Spawned, Some(subagent)) = (self.kind, &self.subagent_tools) {
+            if !subagent.iter().any(|item| item == name) {
+                return false;
+            }
+        }
+        if name == SPAWN_SUBAGENTS && self.hides_spawn() {
+            return false;
+        }
+        true
+    }
+
+    fn hides_spawn(&self) -> bool {
+        match self.kind {
+            RunKind::Root => true,
+            RunKind::Step | RunKind::Spawned => self.depth >= self.max_subagent_depth,
+        }
     }
 
     /// Second check of the visible set, then the implementation.
@@ -423,5 +455,49 @@ mod tests {
             other => panic!("unexpected {other}"),
         }
         assert_eq!(calls[1].load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn definitions_follow_the_live_registry_and_the_kind_rules() {
+        let (registry, _) = registry(&["alpha"]);
+        let tools = RunTools::resolve(registry.clone(), None, None).unwrap();
+        assert_eq!(names_of(&tools), ["alpha"]);
+
+        registry
+            .register(Arc::new(Named {
+                name: "late",
+                calls: Arc::new(AtomicUsize::new(0)),
+            }))
+            .unwrap();
+        registry
+            .register(Arc::new(Named {
+                name: "spawn_subagents",
+                calls: Arc::new(AtomicUsize::new(0)),
+            }))
+            .unwrap();
+        assert_eq!(names_of(&tools), ["alpha", "late"]);
+        assert!(tools.get("late").is_some());
+        assert!(
+            tools.get("spawn_subagents").is_none(),
+            "a root still drops spawn_subagents registered after resolve"
+        );
+
+        let allowed = RunTools::resolve(registry.clone(), Some(&["alpha".into()]), None).unwrap();
+        assert_eq!(names_of(&allowed), ["alpha"]);
+        assert!(allowed.get("late").is_none());
+
+        let spec = RunTools::resolve(registry.clone(), None, Some(&["alpha".into()])).unwrap();
+        assert_eq!(names_of(&spec), ["alpha"]);
+
+        registry.unregister("alpha");
+        assert!(tools.get("alpha").is_none());
+        assert_eq!(names_of(&tools), ["late"]);
+
+        registry.mark_mcp_down("late");
+        registry.unregister("late");
+        assert!(tools.mcp_down("late"));
+        assert!(!spec.mcp_down("late"), "a spec-hidden name stays not_found");
+        registry.clear_mcp_down(["late"]);
+        assert!(!tools.mcp_down("late"));
     }
 }

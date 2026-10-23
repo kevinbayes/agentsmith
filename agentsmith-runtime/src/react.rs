@@ -6,7 +6,7 @@ use agentsmith_llm::{
 };
 use agentsmith_tools::ToolCtx;
 
-use crate::loop_::{Phase, RunContext, RunEvents, RunMeta, RunOutcome, RunStatus};
+use crate::loop_::{poll_sessions, Phase, RunContext, RunEvents, RunMeta, RunOutcome, RunStatus};
 use crate::run_tools::SPAWN_SUBAGENTS;
 
 #[derive(Debug, Default)]
@@ -69,6 +69,7 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
             )
             .await;
         }
+        poll_sessions(&ctx.sessions).await;
         // A cap of zero means the run cannot take a model turn.
         if max_iters == 0 {
             return stop(
@@ -226,11 +227,14 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
                 }
                 Some(_) if ctx.tools.get(&name).is_none() => {
                     consecutive_errors = consecutive_errors.saturating_add(1);
-                    (
-                        observation_err("not_found", format!("no such tool: {name}")),
-                        None,
-                        true,
-                    )
+                    // MCP poll drops a down server's tools. A name still in this
+                    // run's view is that server, not an unknown tool.
+                    let observation = if ctx.tools.unregistered(&name) {
+                        observation_err("mcp_down", "mcp server down")
+                    } else {
+                        observation_err("not_found", format!("no such tool: {name}"))
+                    };
+                    (observation, None, true)
                 }
                 Some(arguments) => {
                     events.tool_used(ctx.run_id, &name).await;

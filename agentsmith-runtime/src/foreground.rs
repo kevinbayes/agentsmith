@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use agentsmith_core::config::{Config, ToolsConfig};
 use agentsmith_core::Error;
-use agentsmith_tools::{register_builtins, BuiltinLimits, ToolRegistry};
+use agentsmith_tools::{register_builtins, BuiltinLimits, SessionPoll, ToolRegistry};
 
 use crate::loop_::{LoopLimits, RunContext, RunEvents, RunOutcome};
 use crate::plan::PlanExecuteLoop;
@@ -27,11 +27,19 @@ pub struct ForegroundParams {
     pub cancel: CancellationToken,
     /// Explicit mode already won over the spec, when the caller passed one.
     pub mode: LoopMode,
+    /// Shared with the poller when MCP servers are configured. `None` builds a fresh map.
+    pub registry: Option<ToolRegistry>,
+    /// `None` when no MCP servers are configured. Nothing is connected in that case.
+    pub sessions: Option<Arc<dyn SessionPoll>>,
 }
 
 pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Error> {
-    let registry = ToolRegistry::new();
+    let registry = match &params.registry {
+        Some(registry) => registry.clone(),
+        None => ToolRegistry::new(),
+    };
     register_foreground_builtins(&registry, &params.config.tools)?;
+    let sessions = params.sessions.clone();
     let max_output_tokens = u32::try_from(params.config.llm.max_output_tokens)
         .map_err(|_| Error::Config("llm.max_output_tokens does not fit in u32".into()))?;
     let limits = LoopLimits::from_config(&params.config.loop_)?;
@@ -52,8 +60,13 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
         allow: allow.clone(),
         limits: limits.clone(),
         events: Arc::clone(&events),
+        sessions: sessions.clone(),
     });
     spawner.install()?;
+    // Required connect failure must not open a transcript or start the loop.
+    if let Some(sessions) = &sessions {
+        sessions.poll().await?;
+    }
     if let Some(names) = params.spec.subagent_tools.as_deref() {
         // The step view, after the depth drop. A spawned view at depth 1 still
         // lists spawn_subagents when max_subagent_depth is 0.
@@ -108,6 +121,7 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
         transcript,
         spec: params.spec,
         spawner: Some(spawner),
+        sessions,
     };
     match params.mode {
         LoopMode::React => ReactLoop.run(ctx).await,

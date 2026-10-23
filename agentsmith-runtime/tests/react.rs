@@ -213,6 +213,7 @@ fn harness(
         events: supervisor.clone(),
         transcript: Transcript::empty(),
         spawner: None,
+        sessions: None,
     };
     Harness {
         llm,
@@ -687,6 +688,59 @@ async fn a_hidden_registered_tool_is_not_called() {
 }
 
 #[tokio::test]
+async fn a_visible_tool_dropped_from_the_registry_is_mcp_down() {
+    let (tool, calls) = ScriptedTool::new("fs__echo", vec![Ok("secret".into())]);
+    let llm = FakeLlm::new(vec![
+        Step::Ok(assistant(
+            None,
+            vec![tool_call("c1", "fs__echo", Some(json!({})))],
+            StopReason::ToolUse,
+        )),
+        Step::Ok(assistant(Some("done"), vec![], StopReason::EndTurn)),
+    ]);
+    let supervisor = Arc::new(Supervisor::new());
+    let registry = ToolRegistry::new();
+    registry.register(tool).unwrap();
+    let tools = RunTools::resolve(registry.clone(), None, None).unwrap();
+    assert!(registry.unregister("fs__echo"));
+    let outcome = ReactLoop
+        .run(RunContext {
+            run_id: agentsmith_core::id::new_id(),
+            parent_run_id: None,
+            depth: 0,
+            name: "react".into(),
+            spec: AgentSpec::react_default(),
+            task: "ship the change".into(),
+            extra_context: None,
+            model: "spec-model".into(),
+            max_output_tokens: 64,
+            temperature: None,
+            max_output_bytes: 32 * 1024,
+            max_iterations: 4,
+            workdir: std::env::temp_dir(),
+            llm: llm.clone(),
+            tools,
+            limits: limits(4, 5),
+            cancel: CancellationToken::new(),
+            events: supervisor,
+            transcript: Transcript::empty(),
+            spawner: None,
+            sessions: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(outcome.status, RunStatus::Succeeded);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let obs = tool_json(&outcome.transcript, "c1");
+    assert_eq!(obs["error"]["kind"], json!("mcp_down"));
+    assert_eq!(obs["error"]["message"], json!("mcp server down"));
+    assert!(!llm.seen()[1]
+        .tool_names
+        .iter()
+        .any(|name| name == "fs__echo"));
+}
+
+#[tokio::test]
 async fn finish_ok_stops_before_later_tool_calls() {
     let (finish, finish_calls) = ScriptedTool::new("finish", vec![Ok("the answer".into())]);
     let (echo, echo_calls) = ScriptedTool::new("echo", vec![Ok("later".into())]);
@@ -783,6 +837,8 @@ async fn foreground_run_writes_jsonl_and_shell_follows_the_unset_flag() {
         llm: llm.clone(),
         cancel: CancellationToken::new(),
         mode: LoopMode::React,
+        registry: None,
+        sessions: None,
     })
     .await
     .unwrap();
@@ -824,6 +880,8 @@ async fn foreground_run_writes_jsonl_and_shell_follows_the_unset_flag() {
         llm: llm_off.clone(),
         cancel: CancellationToken::new(),
         mode: LoopMode::React,
+        registry: None,
+        sessions: None,
     })
     .await
     .unwrap();
@@ -852,6 +910,8 @@ async fn foreground_rejects_an_unavailable_spec_tool_before_writing_jsonl() {
         llm: FakeLlm::new(vec![]),
         cancel: CancellationToken::new(),
         mode: LoopMode::React,
+        registry: None,
+        sessions: None,
     })
     .await
     {
@@ -879,6 +939,8 @@ async fn foreground_rejects_an_oversized_token_limit_before_writing_jsonl() {
         llm: FakeLlm::new(vec![]),
         cancel: CancellationToken::new(),
         mode: LoopMode::React,
+        registry: None,
+        sessions: None,
     })
     .await
     {

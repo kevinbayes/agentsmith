@@ -4,6 +4,7 @@ members = [
     "agentsmith-core",
     "agentsmith-llm",
     "agentsmith-tools",
+    "agentsmith-mcp",
     "agentsmith-runtime",
     "agentsmith-cli",
 ]
@@ -16,8 +17,10 @@ rust-version = "1.88"
 [workspace.dependencies]
 agentsmith-core = { path = "agentsmith-core" }
 agentsmith-llm = { path = "agentsmith-llm" }
+agentsmith-mcp = { path = "agentsmith-mcp" }
 agentsmith-runtime = { path = "agentsmith-runtime" }
 agentsmith-tools = { path = "agentsmith-tools" }
+rmcp = { version = "=3.6.0", default-features = false, features = ["client", "transport-child-process"] }
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 gethostname = "1"

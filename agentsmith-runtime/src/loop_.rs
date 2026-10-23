@@ -3,8 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agentsmith_core::config::{FailurePolicy, LoopConfig};
+use agentsmith_core::redact::redact;
 use agentsmith_core::Error;
 use agentsmith_llm::{Llm, Message};
+use agentsmith_tools::SessionPoll;
 
 use crate::run_tools::RunTools;
 use crate::spawn::SubagentSpawner;
@@ -142,6 +144,18 @@ pub struct RunContext {
     pub transcript: Transcript,
     /// `None` for a ReAct test that never spawns. Foreground runs always set it.
     pub spawner: Option<Arc<SubagentSpawner>>,
+    /// MCP poller. `None` when no servers are configured.
+    pub sessions: Option<Arc<dyn SessionPoll>>,
+}
+
+/// A down server is an observation on the next call, not a stop reason.
+pub(crate) async fn poll_sessions(sessions: &Option<Arc<dyn SessionPoll>>) {
+    let Some(sessions) = sessions else {
+        return;
+    };
+    if let Err(err) = sessions.poll().await {
+        eprintln!("agentsmith: mcp poll: {}", redact(&err.to_string()));
+    }
 }
 
 #[async_trait::async_trait]

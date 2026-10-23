@@ -1,0 +1,28 @@
+[package]
+name = "agentsmith-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Stdio MCP client and session supervisor."
+
+[[bin]]
+name = "mcp-stdio-peer"
+path = "src/bin/mcp_stdio_peer.rs"
+
+[dependencies]
+agentsmith-core.workspace = true
+agentsmith-tools.workspace = true
+async-trait.workspace = true
+libc.workspace = true
+rmcp.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+agentsmith-core.workspace = true
+agentsmith-tools.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

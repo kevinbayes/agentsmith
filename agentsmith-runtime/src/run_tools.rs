@@ -101,6 +101,11 @@ impl RunTools {
             .collect()
     }
 
+    /// The run could see `name`, and poll has since dropped it from the registry.
+    pub fn unregistered(&self, name: &str) -> bool {
+        self.visible.contains(name) && self.registry.get(name).is_none()
+    }
+
     /// `None` when `name` is not in the visible set, even if the process map has it.
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         if !self.visible.contains(name) {

@@ -12,7 +12,7 @@ use agentsmith_core::config::FailurePolicy;
 use agentsmith_core::redact::redact;
 use agentsmith_core::{Error, ToolErrorKind};
 use agentsmith_llm::Llm;
-use agentsmith_tools::{Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
+use agentsmith_tools::{SessionPoll, Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -144,6 +144,7 @@ pub struct SpawnerConfig {
     pub allow: Option<Vec<String>>,
     pub limits: crate::loop_::LoopLimits,
     pub events: Arc<dyn RunEvents>,
+    pub sessions: Option<Arc<dyn SessionPoll>>,
 }
 
 pub struct SubagentSpawner {
@@ -159,6 +160,7 @@ pub struct SubagentSpawner {
     allow: Option<Vec<String>>,
     limits: crate::loop_::LoopLimits,
     events: Arc<dyn RunEvents>,
+    sessions: Option<Arc<dyn SessionPoll>>,
     live: Arc<LiveSlots>,
     callers: Mutex<std::collections::BTreeMap<RunId, CallerInfo>>,
 }
@@ -179,6 +181,7 @@ impl SubagentSpawner {
             allow: config.allow,
             limits: config.limits,
             events: config.events,
+            sessions: config.sessions,
             callers: Mutex::new(std::collections::BTreeMap::new()),
         })
     }
@@ -326,6 +329,7 @@ impl SubagentSpawner {
                 events: Arc::clone(&self.events),
                 transcript: Transcript::empty(),
                 spawner: Some(Arc::clone(self)),
+                sessions: self.sessions.clone(),
             };
             let data_dir = self.data_dir.clone();
             let events = Arc::clone(&self.events);

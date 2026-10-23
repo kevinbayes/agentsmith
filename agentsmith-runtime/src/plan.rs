@@ -10,7 +10,9 @@ use agentsmith_core::Error;
 use agentsmith_llm::{CompletionRequest, Message, ToolChoice, ToolDefinition};
 use serde_json::{json, Value};
 
-use crate::loop_::{Phase, RunContext, RunEvents, RunId, RunMeta, RunOutcome, RunStatus};
+use crate::loop_::{
+    poll_sessions, Phase, RunContext, RunEvents, RunId, RunMeta, RunOutcome, RunStatus,
+};
 use crate::run_tools::SPAWN_SUBAGENTS;
 use crate::spawn::{cut_bytes, ChildOrigin, ChildSpec, SpawnRequest, SubagentSpawner};
 use crate::CancellationToken;
@@ -228,6 +230,7 @@ async fn walk(
         if cancel.is_cancelled() {
             return stop(ctx, events, RunStatus::Cancelled, "cancelled", None).await;
         }
+        poll_sessions(&ctx.sessions).await;
         apply_skips(&mut steps);
         let pending = steps
             .iter()

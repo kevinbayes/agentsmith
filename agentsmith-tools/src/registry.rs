@@ -53,6 +53,12 @@ impl ToolRegistry {
         Ok(())
     }
 
+    /// Drop one name. A re-list uses this so a foreign tool that shares the
+    /// server prefix is left in place.
+    pub fn unregister(&self, name: &str) -> bool {
+        self.write().remove(name).is_some()
+    }
+
     /// Drop every name that starts with `{prefix}__`. The prefix itself stays.
     pub fn unregister_prefix(&self, prefix: &str) {
         let marker = format!("{prefix}__");
@@ -82,4 +88,11 @@ impl ToolRegistry {
     fn write(&self) -> RwLockWriteGuard<'_, BTreeMap<String, Arc<dyn Tool>>> {
         self.inner.write().unwrap_or_else(|err| err.into_inner())
     }
+}
+
+/// One poll of external tool sessions. Both loops call this; reconnect stays
+/// inside the implementer so the runtime does not own a transport.
+#[async_trait::async_trait]
+pub trait SessionPoll: Send + Sync {
+    async fn poll(&self) -> Result<(), Error>;
 }

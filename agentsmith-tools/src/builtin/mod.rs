@@ -126,6 +126,12 @@ pub(crate) fn parse_args<T: DeserializeOwned>(tool: &str, arguments: Value) -> R
     })
 }
 
+/// Model-facing cap shared with builtin tools, so an MCP result cannot exceed
+/// the same ceiling.
+pub fn cap_tool_output(content: &str, max_bytes: u64) -> String {
+    cap_output(content, max_bytes, false)
+}
+
 /// Cut `content` to the output cap. Truncation keeps a `\n[truncated]` suffix
 /// when it fits, on a char boundary. `already_cut` forces the suffix even when
 /// the remaining text is under the cap (the read cap, or a long directory).

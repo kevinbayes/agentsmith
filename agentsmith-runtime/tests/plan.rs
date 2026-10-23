@@ -218,6 +218,7 @@ fn harness(spec: AgentSpec, limits: LoopLimits, steps: Vec<Queued>) -> World {
         allow: None,
         limits: limits.clone(),
         events: supervisor.clone() as Arc<dyn RunEvents>,
+        sessions: None,
     });
     spawner.install().unwrap();
     World {
@@ -270,6 +271,7 @@ async fn run_plan(world: &World) -> RunOutcome {
         events: world.supervisor.clone() as Arc<dyn RunEvents>,
         transcript: Transcript::empty(),
         spawner: Some(world.spawner.clone()),
+        sessions: None,
     };
     PlanExecuteLoop.run(ctx).await.expect("plan run")
 }
@@ -546,6 +548,7 @@ async fn root_cancel_does_not_aggregate_and_skips_creating_the_next_run() {
         allow: None,
         limits: limits.clone(),
         events: supervisor.clone() as Arc<dyn RunEvents>,
+        sessions: None,
     });
     spawner.install().unwrap();
     let run_id = agentsmith_core::id::new_id();
@@ -571,6 +574,7 @@ async fn root_cancel_does_not_aggregate_and_skips_creating_the_next_run() {
             events: supervisor.clone() as Arc<dyn RunEvents>,
             transcript: Transcript::empty(),
             spawner: Some(spawner),
+            sessions: None,
         })
         .await
         .unwrap();
@@ -788,6 +792,7 @@ async fn run_spawn_parent(world: &World, depth: u32, max_iters: u32) -> RunOutco
             events: world.supervisor.clone() as Arc<dyn RunEvents>,
             transcript: Transcript::empty(),
             spawner: Some(world.spawner.clone()),
+            sessions: None,
         })
         .await
         .unwrap()
@@ -1086,6 +1091,8 @@ async fn subagent_tools_cannot_grant_and_foreground_rejects_it_at_start() {
         llm: QueueLlm::new(Vec::new(), CancellationToken::new()),
         cancel: CancellationToken::new(),
         mode: LoopMode::Plan,
+        registry: None,
+        sessions: None,
     })
     .await
     {
@@ -1119,6 +1126,8 @@ async fn subagent_tools_spawn_fails_before_a_step_when_depth_drops_it() {
         llm: QueueLlm::new(Vec::new(), CancellationToken::new()),
         cancel: CancellationToken::new(),
         mode: LoopMode::Plan,
+        registry: None,
+        sessions: None,
     })
     .await
     {
@@ -1203,6 +1212,7 @@ async fn a_child_that_ignores_cancel_releases_its_slot_after_grace() {
         allow: None,
         limits: limits.clone(),
         events: supervisor.clone() as Arc<dyn RunEvents>,
+        sessions: None,
     });
     spawner.install().unwrap();
     let before = spawner.live();
@@ -1265,6 +1275,7 @@ async fn a_panicked_child_writes_one_terminal_finished_line() {
         allow: None,
         limits: limits.clone(),
         events: supervisor.clone() as Arc<dyn RunEvents>,
+        sessions: None,
     });
     spawner.install().unwrap();
     let before = spawner.live();

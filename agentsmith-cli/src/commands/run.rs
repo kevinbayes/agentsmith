@@ -3,11 +3,14 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use agentsmith_core::redact::redact;
 use agentsmith_core::Error;
 use agentsmith_llm::OpenAiCompatible;
+use agentsmith_mcp::{McpSupervisor, McpSupervisorConfig};
 use agentsmith_runtime::{
     run_foreground, CancellationToken, ForegroundParams, LoopMode, RunStatus,
 };
+use agentsmith_tools::{SessionPoll, ToolRegistry};
 
 pub fn execute(
     config_path: Option<&Path>,
@@ -40,6 +43,23 @@ pub fn execute(
     )?;
 
     let cancel = CancellationToken::new();
+    let mcp_servers = config.mcp.servers.clone();
+    let max_output_bytes = config.tools.max_output_bytes;
+    let shutdown_grace = Duration::from_secs(config.service.shutdown_grace_secs);
+    let (registry, mcp) = if mcp_servers.is_empty() {
+        (None, None)
+    } else {
+        let registry = ToolRegistry::new();
+        let mcp = McpSupervisor::new(McpSupervisorConfig {
+            registry: registry.clone(),
+            servers: mcp_servers,
+            max_output_bytes,
+            shutdown_grace,
+            cancel: cancel.clone(),
+        });
+        (Some(registry), Some(mcp))
+    };
+    let sessions = mcp.clone().map(|mcp| mcp as Arc<dyn SessionPoll>);
     let outcome = block_on(
         run_foreground(ForegroundParams {
             task: task.to_string(),
@@ -50,8 +70,11 @@ pub fn execute(
             llm: Arc::new(llm),
             cancel: cancel.clone(),
             mode: resolved,
+            registry,
+            sessions,
         }),
         cancel,
+        mcp,
     )?;
 
     if !outcome.summary.is_empty() {
@@ -86,6 +109,7 @@ fn exit_code(status: RunStatus) -> ExitCode {
 fn block_on(
     run: impl std::future::Future<Output = Result<agentsmith_runtime::RunOutcome, Error>>,
     cancel: CancellationToken,
+    mcp: Option<Arc<McpSupervisor>>,
 ) -> Result<agentsmith_runtime::RunOutcome, Error> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -95,7 +119,13 @@ fn block_on(
         tokio::spawn(async move {
             cancel_on_signal(signal_cancel).await;
         });
-        run.await
+        let result = run.await;
+        if let Some(mcp) = mcp {
+            if let Err(err) = mcp.shutdown().await {
+                eprintln!("agentsmith: mcp shutdown: {}", redact(&err.to_string()));
+            }
+        }
+        result
     })
 }
 

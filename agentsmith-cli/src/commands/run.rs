@@ -1,16 +1,18 @@
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agentsmith_core::redact::redact;
 use agentsmith_core::Error;
 use agentsmith_llm::OpenAiCompatible;
 use agentsmith_mcp::{McpSupervisor, McpSupervisorConfig};
 use agentsmith_runtime::{
-    run_foreground, CancellationToken, ForegroundParams, LoopMode, RunStatus,
+    run_foreground, CancellationToken, ForegroundParams, LoopMode, RunEvents, RunStatus, Supervisor,
 };
 use agentsmith_tools::{SessionPoll, ToolRegistry};
+
+use super::{init_tracing, reporter};
 
 pub fn execute(
     config_path: Option<&Path>,
@@ -19,7 +21,9 @@ pub fn execute(
     spec_path: Option<&Path>,
     workdir: Option<&Path>,
 ) -> Result<ExitCode, Error> {
+    let booted = Instant::now();
     let config = agentsmith_core::config::load(config_path)?;
+    init_tracing(config.harness.log_level);
     let loaded = match spec_path {
         Some(path) => Some(agentsmith_runtime::load_spec(path)?),
         None => None,
@@ -46,8 +50,10 @@ pub fn execute(
     let mcp_servers = config.mcp.servers.clone();
     let max_output_bytes = config.tools.max_output_bytes;
     let shutdown_grace = Duration::from_secs(config.service.shutdown_grace_secs);
+    let reporting = reporter::activate(&config);
     let (registry, mcp) = if mcp_servers.is_empty() {
-        (None, None)
+        let registry = reporting.then(ToolRegistry::new);
+        (registry, None)
     } else {
         let registry = ToolRegistry::new();
         let mcp = McpSupervisor::new(McpSupervisorConfig {
@@ -60,6 +66,26 @@ pub fn execute(
         (Some(registry), Some(mcp))
     };
     let sessions = mcp.clone().map(|mcp| mcp as Arc<dyn SessionPoll>);
+    // A required connect failure drops `ready` unsent, so nothing is posted.
+    let (events, ready, pending) = if reporting {
+        let registry = registry
+            .clone()
+            .expect("an enabled reporter shares the tool registry");
+        let supervisor = Arc::new(Supervisor::new());
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let events = Some(Arc::clone(&supervisor) as Arc<dyn RunEvents>);
+        let pending = PendingReport {
+            config: config.clone(),
+            supervisor,
+            registry,
+            ready: ready_rx,
+            booted,
+            grace: shutdown_grace,
+        };
+        (events, Some(ready_tx), Some(pending))
+    } else {
+        (None, None, None)
+    };
     let outcome = block_on(
         run_foreground(ForegroundParams {
             task: task.to_string(),
@@ -72,9 +98,12 @@ pub fn execute(
             mode: resolved,
             registry,
             sessions,
+            events,
+            ready,
         }),
         cancel,
         mcp,
+        pending,
     )?;
 
     if !outcome.summary.is_empty() {
@@ -106,10 +135,20 @@ fn exit_code(status: RunStatus) -> ExitCode {
     }
 }
 
+struct PendingReport {
+    config: agentsmith_core::config::Config,
+    supervisor: Arc<Supervisor>,
+    registry: ToolRegistry,
+    ready: tokio::sync::oneshot::Receiver<()>,
+    booted: Instant,
+    grace: Duration,
+}
+
 fn block_on(
     run: impl std::future::Future<Output = Result<agentsmith_runtime::RunOutcome, Error>>,
     cancel: CancellationToken,
     mcp: Option<Arc<McpSupervisor>>,
+    pending: Option<PendingReport>,
 ) -> Result<agentsmith_runtime::RunOutcome, Error> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -119,14 +158,60 @@ fn block_on(
         tokio::spawn(async move {
             cancel_on_signal(signal_cancel).await;
         });
-        let result = run.await;
-        if let Some(mcp) = mcp {
-            if let Err(err) = mcp.shutdown().await {
-                eprintln!("agentsmith: mcp shutdown: {}", redact(&err.to_string()));
+        let mut run = std::pin::pin!(run);
+        let mut reporter = None;
+        let grace = pending.as_ref().map(|pending| pending.grace);
+        if let Some(pending) = pending {
+            let PendingReport {
+                config,
+                supervisor,
+                registry,
+                mut ready,
+                booted,
+                grace: _,
+            } = pending;
+            // A run can send `ready` and finish inside one poll. The biased
+            // branch would miss that signal, so check the channel again.
+            let ready = tokio::select! {
+                biased;
+                result = &mut ready => result.is_ok(),
+                _ = &mut run => ready.try_recv().is_ok(),
+            };
+            if ready {
+                reporter = reporter::start(reporter::Parts {
+                    config,
+                    mode: agentsmith_protocol::ProcessMode::Foreground,
+                    supervisor,
+                    registry,
+                    mcp: mcp.clone(),
+                    booted,
+                });
             }
+        }
+        let result = run.await;
+        if let Some(reporter) = reporter {
+            let deadline = Instant::now() + grace.unwrap_or_default();
+            reporter.shutdown(deadline).await;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            shutdown_mcp(mcp, Some(remaining)).await;
+        } else {
+            shutdown_mcp(mcp, None).await;
         }
         result
     })
+}
+
+async fn shutdown_mcp(mcp: Option<Arc<McpSupervisor>>, within: Option<Duration>) {
+    let Some(mcp) = mcp else {
+        return;
+    };
+    let result = match within {
+        Some(grace) => mcp.shutdown_within(grace).await,
+        None => mcp.shutdown().await,
+    };
+    if let Err(err) = result {
+        eprintln!("agentsmith: mcp shutdown: {}", redact(&err.to_string()));
+    }
 }
 
 pub(crate) async fn cancel_on_signal(cancel: CancellationToken) {

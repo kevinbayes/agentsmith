@@ -32,6 +32,38 @@ pub fn redact(text: &str) -> String {
     SECRET_TEXT.replace_all(text, "[redacted]").into_owned()
 }
 
+/// First `max_chars` Unicode scalars. The cut is always on a char boundary.
+pub fn take_chars(text: &str, max_chars: usize) -> &str {
+    match text.char_indices().nth(max_chars) {
+        Some((idx, _)) => &text[..idx],
+        None => text,
+    }
+}
+
+/// 120-char display field: 117 scalars plus `...` when the text is longer.
+pub fn cut_display(text: &str) -> String {
+    const LIMIT: usize = 120;
+    if text.chars().count() <= LIMIT {
+        return text.to_string();
+    }
+    let mut out = take_chars(text, 117).to_string();
+    out.push_str("...");
+    out
+}
+
+/// First task line, control characters removed, then [`redact`] and [`cut_display`].
+///
+/// A line that redaction empties becomes `[redacted]`. The hash is of the raw task.
+pub fn task_title(task: &str) -> String {
+    let line = task.lines().next().unwrap_or("");
+    let stripped: String = line.chars().filter(|ch| !ch.is_control()).collect();
+    let redacted = redact(&stripped);
+    if redacted.is_empty() && !stripped.is_empty() {
+        return "[redacted]".to_string();
+    }
+    cut_display(&redacted)
+}
+
 pub fn redact_value(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
@@ -119,5 +151,22 @@ mod tests {
             redact("prefix sk-testsecret-MORESECRET."),
             "prefix [redacted]."
         );
+    }
+
+    #[test]
+    fn cut_display_stops_on_a_char_boundary() {
+        let text: String = "é".repeat(121);
+        let cut = cut_display(&text);
+        assert_eq!(cut.chars().count(), 120);
+        assert!(cut.ends_with("..."));
+        assert!(cut.is_char_boundary(cut.len()));
+        assert_eq!(take_chars("éé", 1), "é");
+    }
+
+    #[test]
+    fn task_title_redacts_and_replaces_an_emptied_line() {
+        assert_eq!(task_title("sk-testsecret\nrest"), "[redacted]");
+        assert_eq!(task_title("hello\nsecret body"), "hello");
+        assert!(!task_title("use sk-testsecret please").contains("testsecret"));
     }
 }

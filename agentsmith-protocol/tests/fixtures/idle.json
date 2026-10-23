@@ -1,0 +1,59 @@
+{
+  "protocol": "ahsp/1.0",
+  "report_id": "018f5b3a-1111-7111-8111-111111111111",
+  "sequence": 1,
+  "sent_at": "2026-10-21T18:00:00.000Z",
+  "harness": {
+    "instance_id": "018f5b30-0000-7000-8000-000000000001",
+    "name": "build-box",
+    "version": "0.1.0",
+    "pid": 4242,
+    "process_mode": "service",
+    "uptime_secs": 3,
+    "stopping": false,
+    "config_fingerprint": "a1b2c3d4e5f6"
+  },
+  "host": {
+    "hostname": "build-box",
+    "os": "linux",
+    "arch": "x86_64",
+    "processes": [
+      {
+        "name": "claude",
+        "binary": "claude",
+        "installed": true,
+        "version": "1.0.25",
+        "path": "/usr/local/bin/claude",
+        "running_instances": []
+      }
+    ]
+  },
+  "runs": [],
+  "tools": [
+    { "name": "read_file", "source": "builtin", "enabled": true },
+    { "name": "write_file", "source": "builtin", "enabled": true },
+    { "name": "list_dir", "source": "builtin", "enabled": true },
+    { "name": "finish", "source": "builtin", "enabled": true },
+    { "name": "spawn_subagents", "source": "builtin", "enabled": true },
+    { "name": "fs__read_file", "source": "mcp", "server": "fs", "enabled": true }
+  ],
+  "mcp_servers": [
+    {
+      "name": "fs",
+      "transport": "stdio",
+      "command": "npx",
+      "status": "up",
+      "required": false,
+      "tool_count": 1,
+      "tools_skipped": 0,
+      "restart_count": 0,
+      "connected_at": "2026-10-21T18:00:00.100Z",
+      "last_error": null
+    }
+  ],
+  "limits": {
+    "max_subagent_depth": 2,
+    "max_fanout": 8,
+    "live_subagents": 0
+  }
+}

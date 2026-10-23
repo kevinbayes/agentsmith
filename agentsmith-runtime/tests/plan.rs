@@ -1095,6 +1095,8 @@ async fn subagent_tools_cannot_grant_and_foreground_rejects_it_at_start() {
         mode: LoopMode::Plan,
         registry: None,
         sessions: None,
+        events: None,
+        ready: None,
     })
     .await
     {
@@ -1130,6 +1132,8 @@ async fn subagent_tools_spawn_fails_before_a_step_when_depth_drops_it() {
         mode: LoopMode::Plan,
         registry: None,
         sessions: None,
+        events: None,
+        ready: None,
     })
     .await
     {

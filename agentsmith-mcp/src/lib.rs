@@ -5,4 +5,4 @@ mod install_tools;
 mod stdio;
 mod supervisor;
 
-pub use supervisor::{McpSupervisor, McpSupervisorConfig};
+pub use supervisor::{McpSnapshot, McpSnapshotStatus, McpSupervisor, McpSupervisorConfig};

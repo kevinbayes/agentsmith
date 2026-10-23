@@ -1,0 +1,15 @@
+[package]
+name = "agentsmith-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "AHSP 1.0 harness state documents."
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+jsonschema = "=0.30.0"
+serde_json.workspace = true

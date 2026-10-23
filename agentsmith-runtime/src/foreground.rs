@@ -31,6 +31,11 @@ pub struct ForegroundParams {
     pub registry: Option<ToolRegistry>,
     /// `None` when no MCP servers are configured. Nothing is connected in that case.
     pub sessions: Option<Arc<dyn SessionPoll>>,
+    /// `None` builds a supervisor for this run. The CLI passes one so a reporter can read it.
+    pub events: Option<Arc<dyn RunEvents>>,
+    /// Fired after the first MCP poll returns, or immediately when there are no sessions.
+    /// Dropped without a send when that poll fails.
+    pub ready: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Error> {
@@ -44,10 +49,17 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
     let limits = LoopLimits::from_config(&params.config.loop_)?;
     let sessions = params.sessions.clone();
     // Required connect failure must not open a transcript or start the loop.
+    // `ready` stays in `params` until this returns, so a failure drops it unsent.
     if let Some(sessions) = &sessions {
         sessions.poll().await?;
     }
-    let events: Arc<dyn RunEvents> = Arc::new(Supervisor::new());
+    if let Some(ready) = params.ready {
+        let _ = ready.send(());
+    }
+    let events = match params.events {
+        Some(events) => events,
+        None => Arc::new(Supervisor::new()) as Arc<dyn RunEvents>,
+    };
     run_admitted(AdmittedRun {
         run_id: agentsmith_core::id::new_id(),
         task: params.task,

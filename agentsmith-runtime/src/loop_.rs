@@ -10,7 +10,7 @@ use agentsmith_tools::SessionPoll;
 
 use crate::run_tools::RunTools;
 use crate::spawn::SubagentSpawner;
-use crate::spec::AgentSpec;
+use crate::spec::{AgentSpec, LoopMode};
 use crate::transcript::Transcript;
 use crate::CancellationToken;
 
@@ -108,12 +108,17 @@ fn usize_field(name: &str, value: u64) -> Result<usize, Error> {
 }
 
 /// Identity recorded when a run is admitted. The supervisor copies it.
+///
+/// `task` is hashed and titled inside `started`, then dropped. It is not stored.
 pub struct RunMeta {
     pub parent_run_id: Option<RunId>,
     pub depth: u32,
     pub name: String,
     pub max_iterations: u32,
     pub phase: Phase,
+    pub mode: LoopMode,
+    pub spec_id: String,
+    pub task: String,
 }
 
 /// Per-run inputs. The loop owns the transcript; the supervisor does not.
@@ -179,4 +184,6 @@ pub trait RunEvents: Send + Sync {
         status: RunStatus,
         error_kind: Option<String>,
     ) -> (RunStatus, Option<String>);
+    /// Live subagent slots changed by `delta`. The default ignores it.
+    fn adjust_live(&self, _delta: isize) {}
 }

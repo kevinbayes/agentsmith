@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use agentsmith_core::config::McpServerConfig;
-use agentsmith_core::redact::redact;
+use agentsmith_core::redact::{redact, take_chars};
 use agentsmith_core::{Error, ToolErrorKind};
 use agentsmith_tools::{SessionPoll, Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
 use serde_json::Value;
@@ -32,8 +33,11 @@ enum Status {
 
 struct ServerSlot {
     required: bool,
+    command: String,
     client: StdioMcpClient,
     status: Status,
+    /// True only while `try_connect` is awaiting. Backoff waits stay `Down`.
+    connecting: bool,
     /// Next wait after a failed connect. Starts at 1s and doubles, capped at 300s.
     backoff: Duration,
     next_attempt: Option<Instant>,
@@ -41,6 +45,30 @@ struct ServerSlot {
     /// Names this server marked down. Cleared once the server is up again.
     down_names: BTreeSet<String>,
     tools_skipped: u32,
+    restart_count: u32,
+    connected_at: Option<SystemTime>,
+    last_error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpSnapshotStatus {
+    Up,
+    Down,
+    Connecting,
+}
+
+/// Plain session facts for a state report. Not a client handle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpSnapshot {
+    pub name: String,
+    pub command: String,
+    pub status: McpSnapshotStatus,
+    pub required: bool,
+    pub tool_count: u32,
+    pub tools_skipped: u32,
+    pub restart_count: u32,
+    pub connected_at: Option<SystemTime>,
+    pub last_error: Option<String>,
 }
 
 /// Owns every stdio session. `poll` is the only connect, re-list, and backoff site.
@@ -70,13 +98,18 @@ impl McpSupervisor {
                     name,
                     ServerSlot {
                         required: server.required,
+                        command: command_basename(&server.command),
                         client,
                         status: Status::Down,
+                        connecting: false,
                         backoff: BACKOFF_START,
                         next_attempt: None,
                         registered: BTreeSet::new(),
                         down_names: BTreeSet::new(),
                         tools_skipped: 0,
+                        restart_count: 0,
+                        connected_at: None,
+                        last_error: None,
                     },
                 );
             }
@@ -93,10 +126,17 @@ impl McpSupervisor {
 
     /// Close every session, sharing one grace deadline. Later sessions get the remainder.
     pub async fn shutdown(&self) -> Result<(), Error> {
+        self.shutdown_within(self.grace).await
+    }
+
+    /// Same close as [`Self::shutdown`], with a caller-supplied budget.
+    ///
+    /// The reporter uses whatever shutdown grace remains after its stopping post.
+    pub async fn shutdown_within(&self, grace: Duration) -> Result<(), Error> {
         // Connect parks its child before releasing this lock. Closing first
         // would miss that child, or race an in-flight poll.
         let _poll = self.poll_lock.lock().await;
-        let deadline = Instant::now() + self.grace;
+        let deadline = Instant::now() + grace;
         let clients = {
             let servers = lock(&self.servers);
             servers
@@ -117,6 +157,7 @@ impl McpSupervisor {
         let mut servers = lock(&self.servers);
         for slot in servers.values_mut() {
             slot.status = Status::Down;
+            slot.connecting = false;
             self.forget_installed(slot);
         }
         match first_error {
@@ -179,6 +220,33 @@ impl McpSupervisor {
             .unwrap_or(0)
     }
 
+    /// One snapshot of every configured server. Backoff waits are `Down`.
+    pub fn snapshot(&self) -> Vec<McpSnapshot> {
+        lock(&self.servers)
+            .iter()
+            .map(|(name, slot)| {
+                let status = if slot.status == Status::Up {
+                    McpSnapshotStatus::Up
+                } else if slot.connecting {
+                    McpSnapshotStatus::Connecting
+                } else {
+                    McpSnapshotStatus::Down
+                };
+                McpSnapshot {
+                    name: name.clone(),
+                    command: slot.command.clone(),
+                    status,
+                    required: slot.required,
+                    tool_count: u32::try_from(slot.registered.len()).unwrap_or(u32::MAX),
+                    tools_skipped: slot.tools_skipped,
+                    restart_count: slot.restart_count,
+                    connected_at: slot.connected_at,
+                    last_error: slot.last_error.clone(),
+                }
+            })
+            .collect()
+    }
+
     /// Names whose session status is down. This is the only status query.
     pub fn down_servers(&self) -> Vec<String> {
         lock(&self.servers)
@@ -229,6 +297,13 @@ impl McpSupervisor {
     }
 
     async fn try_connect(&self, name: &str) -> Result<(), Error> {
+        self.set_connecting(name, true);
+        let result = self.connect_and_list(name).await;
+        self.set_connecting(name, false);
+        result
+    }
+
+    async fn connect_and_list(&self, name: &str) -> Result<(), Error> {
         let (client, required) = {
             let servers = lock(&self.servers);
             let Some(slot) = servers.get(name) else {
@@ -253,13 +328,19 @@ impl McpSupervisor {
 
     /// Failed connect attempt. Backoff advances only here.
     async fn fail_connect(&self, name: &str, message: &str, required: bool) -> Result<(), Error> {
+        // The connect attempt is over. The grace close below is not `connecting`.
+        self.set_connecting(name, false);
         let message = redact(message);
+        let stored = take_chars(&message, 256).to_string();
         let client = {
             let mut servers = lock(&self.servers);
             let Some(slot) = servers.get_mut(name) else {
                 return Ok(());
             };
             slot.status = Status::Down;
+            slot.connected_at = None;
+            slot.last_error = Some(stored);
+            slot.restart_count = slot.restart_count.saturating_add(1);
             let wait = slot.backoff;
             slot.next_attempt = Some(Instant::now() + wait);
             slot.backoff = (slot.backoff * 2).min(BACKOFF_CAP);
@@ -283,7 +364,13 @@ impl McpSupervisor {
             let Some(slot) = servers.get_mut(name) else {
                 return;
             };
+            let was_up = slot.status == Status::Up;
             slot.status = Status::Down;
+            slot.connected_at = None;
+            if was_up {
+                slot.restart_count = slot.restart_count.saturating_add(1);
+                slot.last_error = Some("transport closed".to_string());
+            }
             self.forget_installed(slot);
             slot.client.clone()
         };
@@ -296,8 +383,11 @@ impl McpSupervisor {
             return;
         };
         slot.status = Status::Up;
+        slot.connecting = false;
         slot.backoff = BACKOFF_START;
         slot.next_attempt = None;
+        slot.connected_at = Some(SystemTime::now());
+        slot.last_error = None;
         let down = std::mem::take(&mut slot.down_names);
         self.registry
             .clear_mcp_down(down.iter().map(String::as_str));
@@ -326,6 +416,21 @@ impl McpSupervisor {
         slot.registered = outcome.registered;
         slot.tools_skipped = outcome.tools_skipped;
     }
+
+    fn set_connecting(&self, name: &str, connecting: bool) {
+        let mut servers = lock(&self.servers);
+        if let Some(slot) = servers.get_mut(name) {
+            slot.connecting = connecting;
+        }
+    }
+}
+
+fn command_basename(command: &str) -> String {
+    Path::new(command)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| command.to_string())
 }
 
 fn mcp_tool(

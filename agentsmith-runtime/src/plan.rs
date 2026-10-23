@@ -15,6 +15,7 @@ use crate::loop_::{
 };
 use crate::run_tools::SPAWN_SUBAGENTS;
 use crate::spawn::{cut_bytes, ChildOrigin, ChildSpec, SpawnRequest, SubagentSpawner};
+use crate::spec::LoopMode;
 use crate::CancellationToken;
 
 const REPAIR: &str = "The previous response was not a valid submit_plan call. Call submit_plan with a JSON object matching the schema. Do not explain.";
@@ -73,6 +74,9 @@ async fn execute(mut ctx: RunContext) -> Result<RunOutcome, Error> {
                 name: ctx.name.clone(),
                 max_iterations: ctx.limits.step_max_iterations,
                 phase: Phase::Plan,
+                mode: LoopMode::Plan,
+                spec_id: ctx.spec.id.clone(),
+                task: ctx.task.clone(),
             },
         )
         .await;

@@ -8,6 +8,7 @@ use agentsmith_tools::ToolCtx;
 
 use crate::loop_::{poll_sessions, Phase, RunContext, RunEvents, RunMeta, RunOutcome, RunStatus};
 use crate::run_tools::SPAWN_SUBAGENTS;
+use crate::spec::LoopMode;
 
 #[derive(Debug, Default)]
 pub struct ReactLoop;
@@ -34,6 +35,9 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
                 name: ctx.name.clone(),
                 max_iterations: ctx.max_iterations,
                 phase: Phase::React,
+                mode: LoopMode::React,
+                spec_id: ctx.spec.id.clone(),
+                task: ctx.task.clone(),
             },
         )
         .await;

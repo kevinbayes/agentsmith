@@ -5,6 +5,7 @@ members = [
     "agentsmith-llm",
     "agentsmith-tools",
     "agentsmith-mcp",
+    "agentsmith-protocol",
     "agentsmith-runtime",
     "agentsmith-cli",
 ]
@@ -18,8 +19,10 @@ rust-version = "1.88"
 agentsmith-core = { path = "agentsmith-core" }
 agentsmith-llm = { path = "agentsmith-llm" }
 agentsmith-mcp = { path = "agentsmith-mcp" }
+agentsmith-protocol = { path = "agentsmith-protocol" }
 agentsmith-runtime = { path = "agentsmith-runtime" }
 agentsmith-tools = { path = "agentsmith-tools" }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 rmcp = { version = "=3.6.0", default-features = false, features = ["client", "transport-child-process"] }
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
@@ -43,4 +46,4 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
 url = "2"
-uuid = { version = "1", features = ["v7"] }
+uuid = { version = "1", features = ["v7", "serde"] }

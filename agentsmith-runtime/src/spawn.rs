@@ -22,7 +22,7 @@ use tokio::task::JoinHandle;
 use crate::loop_::{RunContext, RunEvents, RunId, RunMeta, RunOutcome, RunStatus};
 use crate::react::ReactLoop;
 use crate::run_tools::{RunKind, RunTools, ToolFilter, SPAWN_SUBAGENTS};
-use crate::spec::AgentSpec;
+use crate::spec::{AgentSpec, LoopMode};
 use crate::transcript::Transcript;
 use crate::CancellationToken;
 
@@ -132,13 +132,15 @@ impl SpawnHub {
 struct LiveSlots {
     current: AtomicUsize,
     max: usize,
+    on_change: Arc<dyn Fn(isize) + Send + Sync>,
 }
 
 impl LiveSlots {
-    fn new(max: usize) -> Self {
+    fn new(max: usize, on_change: Arc<dyn Fn(isize) + Send + Sync>) -> Self {
         Self {
             current: AtomicUsize::new(0),
             max,
+            on_change,
         }
     }
 
@@ -161,15 +163,22 @@ impl LiveSlots {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return true,
+                Ok(_) => {
+                    (self.on_change)(n as isize);
+                    return true;
+                }
                 Err(observed) => current = observed,
             }
         }
     }
 
     fn release(&self, n: usize) {
+        if n == 0 {
+            return;
+        }
         let prev = self.current.fetch_sub(n, Ordering::AcqRel);
         debug_assert!(prev >= n, "live_subagents released twice");
+        (self.on_change)(-(n as isize));
     }
 }
 
@@ -211,8 +220,11 @@ pub struct SubagentSpawner {
 
 impl SubagentSpawner {
     pub fn new(config: SpawnerConfig) -> Arc<Self> {
+        let on_events = Arc::clone(&config.events);
+        let on_change: Arc<dyn Fn(isize) + Send + Sync> =
+            Arc::new(move |delta| on_events.adjust_live(delta));
         Arc::new(Self {
-            live: Arc::new(LiveSlots::new(config.limits.max_live_subagents)),
+            live: Arc::new(LiveSlots::new(config.limits.max_live_subagents, on_change)),
             registry: config.registry,
             llm: config.llm,
             model: config.model,
@@ -362,6 +374,9 @@ impl SubagentSpawner {
                         name: agent.name.clone(),
                         max_iterations: self.limits.step_max_iterations,
                         phase: crate::loop_::Phase::React,
+                        mode: LoopMode::React,
+                        spec_id: self.spec.id.clone(),
+                        task: agent.task.clone(),
                     },
                 )
                 .await;

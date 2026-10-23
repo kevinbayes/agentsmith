@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use agentsmith_core::config::{Config, LogLevel, ToolsConfig};
+use agentsmith_core::config::{Config, ToolsConfig};
 use agentsmith_core::redact::redact;
 use agentsmith_core::Error;
 use agentsmith_llm::{Llm, OpenAiCompatible};
@@ -24,7 +24,9 @@ use hyper_util::rt::TokioIo;
 use serde::Serialize;
 use tokio::net::TcpListener;
 
+use super::init_tracing;
 use super::local_api;
+use super::reporter::{self, ReporterHandle};
 use super::run::cancel_on_signal;
 
 pub(crate) const MAX_BODY: usize = 1024 * 1024;
@@ -44,6 +46,7 @@ pub(crate) struct ServiceInner {
     started: Instant,
     shutdown: AtomicBool,
     poll_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    reporter: Mutex<Option<ReporterHandle>>,
     pub(crate) limits: LoopLimits,
     pub(crate) max_output_tokens: u32,
 }
@@ -137,6 +140,13 @@ impl RunEvents for ServiceEvents {
             inner.note_terminal(run);
         }
         result
+    }
+
+    fn adjust_live(&self, delta: isize) {
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        inner.supervisor.add_live(delta);
     }
 }
 
@@ -236,7 +246,13 @@ impl ServiceInner {
         })
     }
 
-    pub(crate) fn root_meta(&self, mode: LoopMode, name: &str) -> RunMeta {
+    pub(crate) fn root_meta(
+        &self,
+        mode: LoopMode,
+        name: &str,
+        spec_id: &str,
+        task: &str,
+    ) -> RunMeta {
         RunMeta {
             parent_run_id: None,
             depth: 0,
@@ -246,6 +262,9 @@ impl ServiceInner {
                 LoopMode::Plan => self.limits.step_max_iterations,
             },
             phase: phase_of(mode),
+            mode,
+            spec_id: spec_id.to_string(),
+            task: task.to_string(),
         }
     }
 
@@ -310,9 +329,16 @@ impl ServiceInner {
         })
     }
 
-    pub(crate) async fn record_mcp_down(&self, run_id: RunId, mode: LoopMode, name: &str) {
+    pub(crate) async fn record_mcp_down(
+        &self,
+        run_id: RunId,
+        mode: LoopMode,
+        name: &str,
+        spec_id: &str,
+        task: &str,
+    ) {
         self.events
-            .started(run_id, self.root_meta(mode, name))
+            .started(run_id, self.root_meta(mode, name, spec_id, task))
             .await;
         self.events
             .finished(run_id, RunStatus::Failed, Some("mcp_down".into()))
@@ -528,6 +554,7 @@ impl RunningService {
                 started: Instant::now(),
                 shutdown: AtomicBool::new(false),
                 poll_task: Mutex::new(None),
+                reporter: Mutex::new(None),
                 limits,
                 max_output_tokens,
             }
@@ -550,6 +577,16 @@ impl RunningService {
         }
         let listener = TcpListener::bind(bind).await?;
         let local_addr = listener.local_addr()?;
+        if let Some(handle) = reporter::start(reporter::Parts {
+            config: inner.config.clone(),
+            mode: agentsmith_protocol::ProcessMode::Service,
+            supervisor: Arc::clone(&inner.supervisor),
+            registry: inner.registry.clone(),
+            mcp: inner.mcp.clone(),
+            booted: inner.started,
+        }) {
+            *lock(&inner.reporter) = Some(handle);
+        }
         let serve_inner = Arc::clone(&inner);
         let join = tokio::spawn(async move {
             accept_loop(serve_inner, listener).await;
@@ -631,9 +668,18 @@ async fn accept_loop(inner: Arc<ServiceInner>, listener: TcpListener) {
     if let Some(task) = poll_task {
         let _ = task.await;
     }
-    // `shutdown` is the one close budget. A timeout around it drops
-    // `close_with_timeout` before `Ok(None)` can SIGKILL the recorded pid.
-    if let Some(mcp) = &inner.mcp {
+    // One grace budget. The stopping post uses what it needs; MCP gets the rest.
+    // A timeout around MCP shutdown drops the close before it can SIGKILL.
+    let reporter = lock(&inner.reporter).take();
+    if let Some(reporter) = reporter {
+        let deadline =
+            Instant::now() + Duration::from_secs(inner.config.service.shutdown_grace_secs);
+        reporter.shutdown(deadline).await;
+        if let Some(mcp) = &inner.mcp {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let _ = mcp.shutdown_within(remaining).await;
+        }
+    } else if let Some(mcp) = &inner.mcp {
         let _ = mcp.shutdown().await;
     }
 }
@@ -687,26 +733,6 @@ pub fn execute(config_path: Option<&Path>) -> Result<ExitCode, Error> {
         }
     })?;
     Ok(ExitCode::SUCCESS)
-}
-
-fn init_tracing(level: LogLevel) {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_filter(level)));
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        .try_init();
-}
-
-fn log_filter(level: LogLevel) -> &'static str {
-    match level {
-        LogLevel::Trace => "trace",
-        LogLevel::Debug => "debug",
-        LogLevel::Info => "info",
-        LogLevel::Warn => "warn",
-        LogLevel::Error => "error",
-    }
 }
 
 fn parse_bind(bind: &str) -> Result<SocketAddr, Error> {

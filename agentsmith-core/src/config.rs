@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
+use crate::id::sha256_12;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::Error;
@@ -991,15 +991,6 @@ fn parse_failure_policy(raw: &str) -> Result<FailurePolicy, Error> {
             "loop.failure_policy must be continue|fail_fast, got {raw}"
         ))),
     }
-}
-
-fn sha256_12(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest
-        .iter()
-        .take(6)
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]

@@ -960,6 +960,8 @@ async fn foreground_run_writes_jsonl_and_shell_follows_the_unset_flag() {
         mode: LoopMode::React,
         registry: None,
         sessions: None,
+        events: None,
+        ready: None,
     })
     .await
     .unwrap();
@@ -1003,6 +1005,8 @@ async fn foreground_run_writes_jsonl_and_shell_follows_the_unset_flag() {
         mode: LoopMode::React,
         registry: None,
         sessions: None,
+        events: None,
+        ready: None,
     })
     .await
     .unwrap();
@@ -1033,6 +1037,8 @@ async fn foreground_rejects_an_unavailable_spec_tool_before_writing_jsonl() {
         mode: LoopMode::React,
         registry: None,
         sessions: None,
+        events: None,
+        ready: None,
     })
     .await
     {
@@ -1062,6 +1068,8 @@ async fn foreground_rejects_an_oversized_token_limit_before_writing_jsonl() {
         mode: LoopMode::React,
         registry: None,
         sessions: None,
+        events: None,
+        ready: None,
     })
     .await
     {

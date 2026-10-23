@@ -180,7 +180,7 @@ async fn create_run(
     }
     if mcp_down {
         inner
-            .record_mcp_down(admitted.run_id, mode, &spec.name)
+            .record_mcp_down(admitted.run_id, mode, &spec.name, &spec.id, &body.task)
             .await;
         return json(
             StatusCode::CREATED,
@@ -191,7 +191,10 @@ async fn create_run(
     }
     inner
         .events
-        .started(admitted.run_id, inner.root_meta(mode, &spec.name))
+        .started(
+            admitted.run_id,
+            inner.root_meta(mode, &spec.name, &spec.id, &body.task),
+        )
         .await;
     let run = AdmittedRun {
         run_id: admitted.run_id,

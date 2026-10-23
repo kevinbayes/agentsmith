@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentsmith.dev/schema/ahsp-1.0.json",
+  "title": "AhspStateReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "report_id", "sequence", "sent_at", "harness", "host", "runs", "tools", "mcp_servers", "limits"],
+  "properties": {
+    "protocol": { "const": "ahsp/1.0" },
+    "report_id": { "type": "string", "format": "uuid" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "sent_at": { "type": "string", "format": "date-time" },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instance_id", "name", "version", "pid", "process_mode", "uptime_secs", "stopping", "config_fingerprint"],
+      "properties": {
+        "instance_id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "version": { "type": "string", "maxLength": 32 },
+        "pid": { "type": "integer", "minimum": 0 },
+        "process_mode": { "enum": ["foreground", "service"] },
+        "uptime_secs": { "type": "integer", "minimum": 0 },
+        "stopping": { "type": "boolean" },
+        "config_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{12}$" }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostname", "os", "arch", "processes"],
+      "properties": {
+        "hostname": { "type": "string", "maxLength": 253 },
+        "os": { "type": "string", "maxLength": 32 },
+        "arch": { "type": "string", "maxLength": 32 },
+        "processes": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/process_watch" }
+        }
+      }
+    },
+    "runs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/run" }
+    },
+    "tools": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/tool" }
+    },
+    "mcp_servers": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/mcp_server" }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_subagent_depth", "max_fanout", "live_subagents"],
+      "properties": {
+        "max_subagent_depth": { "type": "integer", "minimum": 0 },
+        "max_fanout": { "type": "integer", "minimum": 1 },
+        "live_subagents": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "truncated": { "type": "boolean" }
+  },
+  "$defs": {
+    "process_watch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "binary", "installed", "version", "path", "running_instances"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 64 },
+        "binary": { "type": "string", "maxLength": 256 },
+        "installed": { "type": "boolean" },
+        "version": { "type": ["string", "null"], "maxLength": 120 },
+        "path": { "type": ["string", "null"], "maxLength": 512 },
+        "running_instances": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["pid", "name", "cmd_summary"],
+            "properties": {
+              "pid": { "type": "integer", "minimum": 0 },
+              "name": { "type": "string", "maxLength": 64 },
+              "cmd_summary": { "type": "string", "maxLength": 120 }
+            }
+          }
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "parent_run_id", "root_run_id", "depth", "name", "mode", "status", "phase", "iteration", "max_iterations", "task_sha256_12", "task_title", "spec_id", "started_at", "finished_at", "error_kind", "children", "tool_use"],
+      "properties": {
+        "run_id": { "type": "string", "format": "uuid" },
+        "parent_run_id": { "type": ["string", "null"], "format": "uuid" },
+        "root_run_id": { "type": "string", "format": "uuid" },
+        "depth": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "name": { "type": "string", "maxLength": 64 },
+        "mode": { "enum": ["react", "plan"] },
+        "status": { "$ref": "#/$defs/run_status" },
+        "phase": { "enum": ["plan", "execute", "react", "join"] },
+        "iteration": { "type": "integer", "minimum": 0 },
+        "max_iterations": { "type": "integer", "minimum": 1 },
+        "task_sha256_12": { "type": "string", "pattern": "^[0-9a-f]{12}$" },
+        "task_title": { "type": "string", "maxLength": 120 },
+        "spec_id": { "type": ["string", "null"], "maxLength": 64 },
+        "started_at": { "type": "string", "format": "date-time" },
+        "finished_at": { "type": ["string", "null"], "format": "date-time" },
+        "error_kind": { "type": ["string", "null"], "maxLength": 32 },
+        "children": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["run_id", "name", "status", "depth"],
+            "properties": {
+              "run_id": { "type": "string", "format": "uuid" },
+              "name": { "type": "string", "maxLength": 64 },
+              "status": { "$ref": "#/$defs/run_status" },
+              "depth": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "tool_use": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 },
+          "maxProperties": 64
+        }
+      }
+    },
+    "run_status": {
+      "enum": ["running", "succeeded", "failed", "partial", "cancelled", "max_iterations", "timed_out"]
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source", "enabled"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 96 },
+        "source": { "enum": ["builtin", "mcp"] },
+        "server": { "type": "string", "maxLength": 32 },
+        "enabled": { "type": "boolean" }
+      },
+      "if": {
+        "properties": { "source": { "const": "mcp" } },
+        "required": ["source"]
+      },
+      "then": { "required": ["name", "source", "enabled", "server"] },
+      "else": { "properties": { "server": false } }
+    },
+    "mcp_server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "transport", "command", "status", "required", "tool_count", "tools_skipped", "restart_count", "last_error"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 32 },
+        "transport": { "const": "stdio" },
+        "command": { "type": "string", "maxLength": 64, "description": "Basename only, never args." },
+        "status": { "enum": ["up", "down", "connecting"] },
+        "required": { "type": "boolean" },
+        "tool_count": { "type": "integer", "minimum": 0 },
+        "tools_skipped": { "type": "integer", "minimum": 0 },
+        "restart_count": { "type": "integer", "minimum": 0 },
+        "connected_at": { "type": ["string", "null"], "format": "date-time" },
+        "last_error": { "type": ["string", "null"], "maxLength": 256 }
+      }
+    }
+  }
+}

@@ -9,6 +9,8 @@ use url::Url;
 use crate::Error;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
+const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 const DEFAULT_LLM_TIMEOUT_SECS: u64 = 120;
 const CEILING_LLM_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 4096;
@@ -132,9 +134,30 @@ pub struct HarnessConfig {
     pub workdir: PathBuf,
 }
 
+/// Which chat API the process uses. Set this when deploying.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmProvider {
+    #[default]
+    OpenAi,
+    Anthropic,
+    Gemini,
+}
+
+impl<'de> Deserialize<'de> for LlmProvider {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        parse_llm_provider(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LlmConfig {
+    pub provider: LlmProvider,
     pub base_url: String,
     pub model: String,
     pub api_key: String,
@@ -245,6 +268,7 @@ pub struct McpServerConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
+            provider: LlmProvider::OpenAi,
             base_url: DEFAULT_BASE_URL.to_string(),
             model: String::new(),
             api_key: String::new(),
@@ -412,6 +436,7 @@ fn from_toml_str(
 
 fn finish(mut cfg: Config, env: &BTreeMap<String, String>, cwd: &Path) -> Result<Config, Error> {
     apply_env(&mut cfg, env)?;
+    apply_provider_base(&mut cfg.llm);
     fill_dynamic(&mut cfg, env, cwd);
     // The report interval is the one clamp. Every other ceiling rejects.
     cfg.reporter.interval_secs = cfg
@@ -448,6 +473,9 @@ fn apply_harness_env(cfg: &mut Config, env: &BTreeMap<String, String>) -> Result
 }
 
 fn apply_llm_env(cfg: &mut Config, env: &BTreeMap<String, String>) -> Result<(), Error> {
+    if let Some(raw) = env.get("AGENTSMITH_LLM_PROVIDER") {
+        cfg.llm.provider = parse_llm_provider(raw)?;
+    }
     overlay_string(&mut cfg.llm.base_url, env, "AGENTSMITH_LLM_BASE_URL");
     overlay_string(&mut cfg.llm.model, env, "AGENTSMITH_LLM_MODEL");
     overlay_string(&mut cfg.llm.api_key, env, "AGENTSMITH_LLM_API_KEY");
@@ -560,6 +588,19 @@ fn apply_reporter_env(cfg: &mut Config, env: &BTreeMap<String, String>) -> Resul
         "AGENTSMITH_REPORTER_TIMEOUT_SECS",
     )?;
     Ok(())
+}
+
+/// The OpenAI URL is the unset default. Anthropic and Gemini replace it with
+/// their own API root unless the file or the environment set `base_url`.
+fn apply_provider_base(llm: &mut LlmConfig) {
+    if llm.base_url != DEFAULT_BASE_URL {
+        return;
+    }
+    llm.base_url = match llm.provider {
+        LlmProvider::OpenAi => DEFAULT_BASE_URL.to_string(),
+        LlmProvider::Anthropic => ANTHROPIC_BASE_URL.to_string(),
+        LlmProvider::Gemini => GEMINI_BASE_URL.to_string(),
+    };
 }
 
 fn fill_dynamic(cfg: &mut Config, env: &BTreeMap<String, String>, cwd: &Path) {
@@ -983,6 +1024,17 @@ fn parse_log_level(raw: &str) -> Result<LogLevel, Error> {
     }
 }
 
+fn parse_llm_provider(raw: &str) -> Result<LlmProvider, Error> {
+    match raw {
+        "openai" => Ok(LlmProvider::OpenAi),
+        "anthropic" => Ok(LlmProvider::Anthropic),
+        "gemini" => Ok(LlmProvider::Gemini),
+        _ => Err(Error::Config(format!(
+            "llm.provider must be openai|anthropic|gemini, got {raw}"
+        ))),
+    }
+}
+
 fn parse_failure_policy(raw: &str) -> Result<FailurePolicy, Error> {
     match raw {
         "continue" => Ok(FailurePolicy::Continue),
@@ -1036,6 +1088,7 @@ mod tests {
     #[test]
     fn defaults_load_without_model_or_api_key() {
         let cfg = load_toml("").unwrap();
+        assert_eq!(cfg.llm.provider, LlmProvider::OpenAi);
         assert!(cfg.llm.model.is_empty());
         assert!(cfg.llm.api_key.is_empty());
         assert!(cfg.llm.temperature.is_none());
@@ -1071,6 +1124,49 @@ mod tests {
         assert_eq!(fp.len(), 12);
         assert!(fp.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')));
         assert!(!cfg.canonical_json().unwrap().contains("temperature"));
+    }
+
+    #[test]
+    fn provider_selects_the_default_base_url() {
+        let anthropic = load_toml("[llm]\nprovider = \"anthropic\"\n").unwrap();
+        assert_eq!(anthropic.llm.provider, LlmProvider::Anthropic);
+        assert_eq!(anthropic.llm.base_url, ANTHROPIC_BASE_URL);
+        let gemini = load_toml("[llm]\nprovider = \"gemini\"\n").unwrap();
+        assert_eq!(gemini.llm.base_url, GEMINI_BASE_URL);
+        let custom = load_toml(
+            "[llm]\nprovider = \"anthropic\"\nbase_url = \"https://proxy.example/anthropic\"\n",
+        )
+        .unwrap();
+        assert_eq!(custom.llm.base_url, "https://proxy.example/anthropic");
+        let err = load_toml("[llm]\nprovider = \"groq\"\n").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("llm.provider must be openai|anthropic|gemini"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn provider_env_overrides_the_file_then_the_default_base() {
+        let mut env = test_env();
+        env.insert("AGENTSMITH_LLM_PROVIDER".into(), "gemini".into());
+        let cfg = load_toml_with("[llm]\nprovider = \"openai\"\n", &env).unwrap();
+        assert_eq!(cfg.llm.provider, LlmProvider::Gemini);
+        assert_eq!(cfg.llm.base_url, GEMINI_BASE_URL);
+        env.insert(
+            "AGENTSMITH_LLM_BASE_URL".into(),
+            "https://proxy.example/gemini".into(),
+        );
+        let cfg = load_toml_with("", &env).unwrap();
+        assert_eq!(cfg.llm.provider, LlmProvider::Gemini);
+        assert_eq!(cfg.llm.base_url, "https://proxy.example/gemini");
+        env.insert("AGENTSMITH_LLM_PROVIDER".into(), "nope".into());
+        let err = load_toml_with("", &env).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("llm.provider must be openai|anthropic|gemini"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use agentsmith_core::config::{Config, ToolsConfig};
 use agentsmith_core::redact::redact;
 use agentsmith_core::Error;
-use agentsmith_llm::{Llm, OpenAiCompatible};
+use agentsmith_llm::{connect, Llm};
 use agentsmith_mcp::{McpSupervisor, McpSupervisorConfig};
 use agentsmith_runtime::{
     CancellationToken, LoopLimits, LoopMode, Phase, RunEvents, RunId, RunMeta, RunStatus, SpawnHub,
@@ -711,7 +711,8 @@ fn spawn_poll(
 
 pub fn execute(config_path: Option<&Path>) -> Result<ExitCode, Error> {
     let config = agentsmith_core::config::load(config_path)?;
-    let llm = OpenAiCompatible::new(
+    let llm = connect(
+        config.llm.provider,
         &config.llm.base_url,
         config.llm.api_key.clone(),
         Duration::from_secs(config.llm.timeout_secs),

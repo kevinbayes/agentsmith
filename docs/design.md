@@ -13,7 +13,7 @@
 
 AgentSmith 2 is a single Rust binary, `agentsmith`, that runs an agent task in the foreground or sits under systemd and reports host and harness state to a remote control plane. The caller picks one of two execution modes: a **plan + execute** walker whose executor can fan out in-process subagents and join them, or a classic **ReAct** loop. Both modes share one tool registry. Built-in tools and tools discovered from MCP servers (stdio in v1) are the same kind of object to the model.
 
-The harness is deliberately smaller than the previous framework. That repo’s value, for this design, is the crate split (shared types, agent runtime, tools, a binary, a protocol), not ArangoDB, Redis, the account/web frontend, the JWKS middleware, or the set of provider-specific HTTP clients. One OpenAI-compatible chat-completions adapter is the only v1 LLM path. The previous worker’s value is the daemon lifecycle and the authenticated state POST, not Signal/Slack/Telegram bridging and not supervision of third-party CLIs.
+The harness is deliberately smaller than the previous framework. That repo’s value, for this design, is the crate split (shared types, agent runtime, tools, a binary, a protocol), not ArangoDB, Redis, the account/web frontend, the JWKS middleware, or the set of provider-specific HTTP clients. `llm.provider` selects `openai`, `anthropic`, or `gemini` at deploy time. OpenAI-compatible servers still share one adapter. The previous worker’s value is the daemon lifecycle and the authenticated state POST, not Signal/Slack/Telegram bridging and not supervision of third-party CLIs.
 
 The wire contract is a new versioned protocol, **AHSP 1.0** (AgentSmith Harness State Protocol). It is telemetry push only. The control plane acks a snapshot; it does not start, stop, or cancel runs in v1.
 
@@ -83,7 +83,7 @@ What is being kept is the shape of “install me as a service and POST state”:
 
 4. **Tool errors are observations.** The swarm recorded execute failures as `{ "error": "Error calling tool." }`. It built the same shape for a missing tool, then `append_tool_call_result_to_memory` dropped that result because the second lookup missed. v1 appends both, with a typed envelope, and adds a consecutive-error cap so a stuck model cannot spin forever. LLM authentication failures and exhausted retries are fatal to the run. They are not fed back as tool results. A tool-call `arguments` string that is not JSON is an `invalid_args` observation, not a panic and not a fatal `complete` error. `Length` and `ContentFilter` with no tool calls fail the run; they are not success.
 
-5. **One OpenAI-compatible adapter.** `Llm` is dyn-compatible so an Anthropic or Gemini adapter can be added later without editing the loop. v1 ships only `OpenAiCompatible`. That covers the five old parsers that already called `from_openai` (OpenAI, Groq, Cerebras, SambaNova, Grok) and any other server that speaks `/v1/chat/completions`. A real llamafile server is in that second set. The old `llamafile_llm.rs` is not: it speaks Gemini `generateContent`, and it is not ported. Anthropic and Gemini wire formats are a non-goal.
+5. **Three chat providers, chosen at deploy time.** `llm.provider` is `openai`, `anthropic`, or `gemini`. The default is `openai`. `Llm` stays dyn-compatible, so the loop does not match on the provider. `openai` is the OpenAI chat-completions adapter and covers any server that speaks `/v1/chat/completions` (Groq, Cerebras, SambaNova, Grok, and a real llamafile) by setting `llm.base_url`. `anthropic` posts to the Messages API. `gemini` posts to `generateContent`. When `base_url` is left at the OpenAI default, Anthropic and Gemini use their own API roots.
 
 6. **Trait objects for tools, not an enum.** MCP tools and builtins must register without a crate-wide match. This deliberately diverges from `enum Tool` in `tools/tool.rs`.
 
@@ -149,7 +149,7 @@ Expected load for the design target, one harness per machine: 0–2 root runs, a
 - Installing or killing third-party CLIs (`agent_mgmt` recipes, `Install`/`Kill` commands).
 - Distributed subagents, a worker mesh, or remote task placement.
 - ArangoDB, Redis, SQLite, account management, a Vite frontend, JWKS, eval (`agentsmith-eval`), the engineer role CLI, Jinja prompt packs.
-- Anthropic, Gemini, or any non-OpenAI chat wire format. HuggingFace TGI stays out until someone maps it onto `OpenAiCompatible` with a base URL.
+- HuggingFace TGI stays out until someone maps it onto `OpenAiCompatible` with a base URL. Anthropic and Gemini are `llm.provider` values, not extra OpenAI parsers.
 - Streamable HTTP MCP, MCP resources/prompts/sampling/oauth, join-any, join-n, human-in-the-loop (`HumanAgent` was already `todo!()`).
 - A control plane implementation in this repo. AHSP is the contract; the server is someone else’s.
 - Windows Service Control Manager, launchd, Snap. Windows and macOS may run `agentsmith run` in a terminal later; v1 install is Linux systemd only, matching the useful part of `install.sh`. The old `shutdown.rs` Windows Ctrl-C branch is not required for v1.
@@ -179,7 +179,7 @@ agentsmith-2/
 | Old | New | What happens |
 |---|---|---|
 | `agentsmith-common` (`config`, `error`, and the unused `database`, `redis`, `disk`, `security`, `event`, `model`) | `agentsmith-core` | Config, errors, ids, redaction. Storage and JWKS are dropped. |
-| `agentsmith-agent` LLM modules + `llm.rs` + `prompt.rs` | `agentsmith-llm` | Trait plus one adapter. Nine clients become one. |
+| `agentsmith-agent` LLM modules + `llm.rs` + `prompt.rs` | `agentsmith-llm` | Trait plus `openai`, `anthropic`, and `gemini`. The five OpenAI-shaped clients stay one adapter. |
 | `agentsmith-agent` `tools/` | `agentsmith-tools` | Trait, registry, builtins. `web_tool.rs` is not ported; a general HTTP client is not a builtin. |
 | (did not exist) | `agentsmith-mcp` | Stdio client. Depends on `agentsmith-tools`, not the reverse, so tools compile without `rmcp`. |
 | `agentsmith-agent` `agent/` + `memory/` + `prompt/repository` | `agentsmith-runtime` (`spec`, `transcript`) | Spec is a file. Memory is a `Vec<Message>`. Repositories are dropped. |
@@ -900,7 +900,8 @@ data_dir = "/home/user/.local/share/agentsmith"  # default: $XDG_DATA_HOME/agent
 workdir = "/home/user/src"    # default: process cwd at start. Omitted run workdir uses this.
 
 [llm]
-base_url = "https://api.openai.com/v1"
+provider = "openai"           # openai | anthropic | gemini. Default openai.
+base_url = "https://api.openai.com/v1"  # omit to use the provider's API root
 model = "gpt-4.1-mini"        # required for a run; no silent default
 # api_key omitted here; set AGENTSMITH_LLM_API_KEY
 timeout_secs = 120
@@ -1005,6 +1006,7 @@ Env overrides:
 | `AGENTSMITH_HARNESS_LOG_LEVEL` | `harness.log_level` |
 | `AGENTSMITH_HARNESS_DATA_DIR` | `harness.data_dir` |
 | `AGENTSMITH_HARNESS_WORKDIR` | `harness.workdir` |
+| `AGENTSMITH_LLM_PROVIDER` | `llm.provider` |
 | `AGENTSMITH_LLM_BASE_URL` | `llm.base_url` |
 | `AGENTSMITH_LLM_MODEL` | `llm.model` |
 | `AGENTSMITH_LLM_API_KEY` | `llm.api_key` |
@@ -2094,7 +2096,7 @@ In-memory only: token cache, `instance_id`, `sequence`, run map, MCP sessions, i
 
 ### 4. LLM clients
 
-**Chosen: one adapter.** Not chosen: porting `llm_factory` and the nine modules. Five of them parse `OpenAIGenerateResponse`: `from_openai`, `from_groq`, `from_cerebras`, `from_sambanova`, and `from_grok`. `llamafile_llm.rs` does not; it is Gemini-shaped. A real llamafile server is still covered, because it speaks `/v1/chat/completions`, not because that file calls `from_openai`. Keeping the nine clients would recreate the weight this rewrite exists to drop. A second adapter is a new type implementing `Llm`, not a change to `ReactLoop`.
+**Chosen: three adapters behind `llm.provider`.** Not chosen: porting `llm_factory` and the nine modules. Five of them parse `OpenAIGenerateResponse`: `from_openai`, `from_groq`, `from_cerebras`, `from_sambanova`, and `from_grok`. Those stay one OpenAI-compatible client selected with `provider = "openai"` and a base URL. `anthropic` and `gemini` are their own wire formats because deployments compare those providers from day one. The loop still calls `Llm::complete`. Adding another provider is a new type, not a change to `ReactLoop`.
 
 ### 5. Memory
 

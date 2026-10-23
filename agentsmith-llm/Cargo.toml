@@ -3,7 +3,7 @@ name = "agentsmith-llm"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "OpenAI-compatible chat completions for AgentSmith."
+description = "OpenAI, Anthropic, and Gemini chat clients for AgentSmith."
 
 [dependencies]
 agentsmith-core.workspace = true

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use agentsmith_core::redact::redact;
 use agentsmith_core::Error;
-use agentsmith_llm::OpenAiCompatible;
+use agentsmith_llm::connect;
 use agentsmith_mcp::{McpSupervisor, McpSupervisorConfig};
 use agentsmith_runtime::{
     run_foreground, CancellationToken, ForegroundParams, LoopMode, RunEvents, RunStatus, Supervisor,
@@ -39,7 +39,8 @@ pub fn execute(
     let workdir = workdir
         .canonicalize()
         .map_err(|err| Error::Config(format!("workdir {}: {err}", workdir.display())))?;
-    let llm = OpenAiCompatible::new(
+    let llm = connect(
+        config.llm.provider,
         &config.llm.base_url,
         config.llm.api_key.clone(),
         Duration::from_secs(config.llm.timeout_secs),

@@ -3,17 +3,13 @@ use std::time::Duration;
 use agentsmith_core::{Error, LlmErrorKind};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use crate::arguments::{compact_json, split_arguments};
+use crate::http::{llm_error, post_json, MAX_RETRIES};
 use crate::types::{
     Completion, CompletionRequest, Llm, Message, StopReason, ToolCall, ToolChoice, ToolDefinition,
 };
-
-/// Extra attempts after the first. Matches the config ceiling in `agentsmith-core`.
-const MAX_RETRIES: u32 = 4;
-const BACKOFF_FIRST_MS: u64 = 500;
-const BACKOFF_LATER_MS: u64 = 1500;
 
 /// OpenAI chat-completions client (`POST {base_url}/chat/completions`).
 ///
@@ -64,66 +60,6 @@ impl OpenAiCompatible {
             retries: retries.min(MAX_RETRIES),
         })
     }
-
-    async fn once(
-        &self,
-        body: &Value,
-        cancel: &CancellationToken,
-    ) -> Result<Completion, OnceError> {
-        if cancel.is_cancelled() {
-            return Err(OnceError::Cancelled);
-        }
-
-        // `body` and `api_key` stay off the error path and out of any log.
-        let pending = self
-            .client
-            .post(self.endpoint.clone())
-            .bearer_auth(&self.api_key)
-            .timeout(self.timeout)
-            .json(body)
-            .send();
-
-        let response = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Err(OnceError::Cancelled),
-            result = pending => result,
-        };
-
-        let response = match response {
-            Ok(response) => response,
-            Err(err) => return Err(transport_error(&err)),
-        };
-
-        let status = response.status();
-        let body_result = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Err(OnceError::Cancelled),
-            result = response.text() => result,
-        };
-
-        if !status.is_success() {
-            // Drop the server body. A 400 can echo the prompt, and the body can
-            // echo the key. Callers log `Error`.
-            drop(body_result);
-            let message = format!("HTTP {status}");
-            let (kind, retry) = classify_status(status);
-            let err = llm_error(kind, message);
-            return Err(if retry {
-                OnceError::Retry(err)
-            } else {
-                OnceError::Done(err)
-            });
-        }
-
-        let text = match body_result {
-            Ok(text) => text,
-            Err(err) => return Err(transport_error(&err)),
-        };
-        match parse_completion(&text) {
-            Ok(completion) => Ok(completion),
-            Err(err) => Err(OnceError::Done(err)),
-        }
-    }
 }
 
 #[async_trait]
@@ -133,37 +69,19 @@ impl Llm for OpenAiCompatible {
             return Err(Error::Cancelled);
         }
         let body = build_body(&request)?;
-        let cancel = &request.cancel;
-        let max_attempts = self.retries + 1;
-        let mut attempt = 0u32;
-        loop {
-            attempt += 1;
-            match self.once(&body, cancel).await {
-                Ok(completion) => return Ok(completion),
-                Err(OnceError::Cancelled) => return Err(Error::Cancelled),
-                Err(OnceError::Done(err)) => return Err(err),
-                Err(OnceError::Retry(err)) => {
-                    if attempt >= max_attempts {
-                        return Err(err);
-                    }
-                    let delay = backoff_delay(attempt - 1);
-                    tokio::select! {
-                        biased;
-                        _ = cancel.cancelled() => return Err(Error::Cancelled),
-                        _ = tokio::time::sleep(delay) => {}
-                    }
-                }
-            }
-        }
+        let text = post_json(
+            &self.client,
+            self.retries,
+            self.timeout,
+            &self.endpoint,
+            Some(self.api_key.as_str()),
+            &[],
+            &body,
+            &request.cancel,
+        )
+        .await?;
+        parse_completion(&text)
     }
-}
-
-enum OnceError {
-    Cancelled,
-    /// Do not retry.
-    Done(Error),
-    /// `complete` retries this until the attempt budget is exhausted.
-    Retry(Error),
 }
 
 /// Append `chat/completions` as one relative path.
@@ -278,31 +196,6 @@ fn tool_choice_to_json(choice: &ToolChoice) -> Value {
     }
 }
 
-/// `true` when the status is retried (429 and 5xx).
-fn classify_status(status: reqwest::StatusCode) -> (LlmErrorKind, bool) {
-    match status.as_u16() {
-        401 | 403 => (LlmErrorKind::Auth, false),
-        429 => (LlmErrorKind::Unavailable, true),
-        500..=599 => (LlmErrorKind::Unavailable, true),
-        400..=499 => (LlmErrorKind::BadRequest, false),
-        _ => (LlmErrorKind::Unavailable, false),
-    }
-}
-
-fn transport_error(err: &reqwest::Error) -> OnceError {
-    if err.is_timeout() {
-        OnceError::Retry(llm_error(LlmErrorKind::Timeout, "request timed out"))
-    } else if err.is_builder() {
-        // Builder failures can quote a rejected header value. Do not forward them.
-        OnceError::Done(llm_error(LlmErrorKind::BadRequest, "invalid HTTP request"))
-    } else {
-        OnceError::Retry(llm_error(
-            LlmErrorKind::Unavailable,
-            format!("request failed: {err}"),
-        ))
-    }
-}
-
 fn parse_completion(body: &str) -> Result<Completion, Error> {
     let value: Value = serde_json::from_str(body)
         .map_err(|_| llm_error(LlmErrorKind::Unavailable, "malformed chat completion"))?;
@@ -374,23 +267,6 @@ fn parse_tool_call(value: &Value) -> Option<ToolCall> {
     })
 }
 
-/// A string is parsed. Invalid JSON keeps the original text and `arguments: None`.
-/// An object (or any other JSON value) is stored as compact text and `Some`.
-fn split_arguments(value: Option<&Value>) -> (String, Option<Value>) {
-    match value {
-        None => (String::new(), None),
-        Some(Value::String(text)) => {
-            let parsed = serde_json::from_str(text).ok();
-            (text.clone(), parsed)
-        }
-        Some(other) => (compact_json(other), Some(other.clone())),
-    }
-}
-
-fn compact_json(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_default()
-}
-
 /// `length` and `content_filter` win even when tool calls are present.
 /// The loop executes those calls, then appends a truncation note.
 /// Any other finish reason follows the tool-call list: empty is `EndTurn`.
@@ -403,27 +279,10 @@ fn map_stop(finish_reason: Option<&str>, has_tool_calls: bool) -> StopReason {
     }
 }
 
-fn backoff_delay(retry_index: u32) -> Duration {
-    let base = if retry_index == 0 {
-        BACKOFF_FIRST_MS
-    } else {
-        BACKOFF_LATER_MS
-    };
-    let min = base.saturating_mul(8) / 10;
-    let max = (base.saturating_mul(12) / 10).max(min);
-    Duration::from_millis(rand::random_range(min..=max))
-}
-
-fn llm_error(kind: LlmErrorKind, message: impl Into<String>) -> Error {
-    Error::Llm {
-        kind,
-        message: message.into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn joins_chat_completions_without_a_second_v1() {
@@ -611,9 +470,9 @@ mod tests {
     #[test]
     fn backoff_stays_within_twenty_percent() {
         for _ in 0..50 {
-            let first = backoff_delay(0);
+            let first = crate::http::backoff_delay(0);
             assert!((400..=600).contains(&first.as_millis()), "{first:?}");
-            let later = backoff_delay(3);
+            let later = crate::http::backoff_delay(3);
             assert!((1200..=1800).contains(&later.as_millis()), "{later:?}");
         }
     }

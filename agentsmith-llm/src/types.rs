@@ -1,10 +1,9 @@
 use agentsmith_core::Error;
 use tokio_util::sync::CancellationToken;
 
-/// Chat-completions client.
+/// Chat client. OpenAI, Anthropic, and Gemini each implement this.
 ///
-/// `async_trait` keeps this dyn-compatible so another provider can be added
-/// without changing the loop. v1 ships only [`crate::OpenAiCompatible`].
+/// `async_trait` keeps it dyn-compatible so the loop does not match on a provider.
 #[async_trait::async_trait]
 pub trait Llm: Send + Sync {
     async fn complete(&self, request: CompletionRequest) -> Result<Completion, Error>;

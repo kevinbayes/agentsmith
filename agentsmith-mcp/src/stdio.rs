@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use tokio::task::JoinHandle;
 
 use agentsmith_core::config::McpServerConfig;
 use agentsmith_core::{Error, ToolErrorKind};
@@ -25,10 +27,23 @@ impl ClientHandler for ToolListWatch {
 }
 
 type Session = RunningService<RoleClient, ToolListWatch>;
+type ConnectTask = JoinHandle<Result<Session, rmcp::service::ClientInitializeError>>;
 
 struct Inner {
     service: Option<Session>,
     pid: Option<u32>,
+    /// In-flight `serve`. Kept so cancel does not drop `TokioChildProcess`.
+    connecting: Option<ConnectTask>,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        // `shutdown_within` takes the handle first. Abort only covers a client
+        // dropped with no close; that drop used to SIGKILL via `ChildWithCleanup`.
+        if let Some(handle) = self.connecting.take() {
+            handle.abort();
+        }
+    }
 }
 
 struct Shared {
@@ -74,6 +89,7 @@ impl StdioMcpClient {
                 inner: tokio::sync::Mutex::new(Inner {
                     service: None,
                     pid: None,
+                    connecting: None,
                 }),
                 changed: Mutex::new(Arc::new(AtomicBool::new(false))),
             }),
@@ -104,18 +120,42 @@ impl StdioMcpClient {
         }
     }
 
-    /// `close_with_timeout` is `TokioChildProcess::graceful_shutdown` (close
-    /// stdin, wait, then kill). SIGKILL the recorded pid only when that wait
-    /// exceeds `timeout` and returns `Ok(None)`. There is no second kill timer.
+    /// `close_with_timeout` closes stdin and waits. SIGKILL the recorded pid
+    /// only when that wait returns `Ok(None)`. One budget, no second kill timer.
+    ///
+    /// A connect that has not stored a session yet is still closed here. Aborting
+    /// that task would drop `TokioChildProcess` and SIGKILL before the wait.
     pub async fn shutdown_within(&self, timeout: Duration) -> Result<(), Error> {
-        let (mut service, pid) = {
+        let started = Instant::now();
+        let (mut service, pid, connecting) = {
             let mut inner = self.shared.inner.lock().await;
-            (inner.service.take(), inner.pid.take())
+            (
+                inner.service.take(),
+                inner.pid.take(),
+                inner.connecting.take(),
+            )
         };
+        if let Some(handle) = connecting {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            match tokio::time::timeout(remaining, handle).await {
+                Ok(Ok(Ok(ready))) => service = Some(ready),
+                Ok(Ok(Err(_))) | Ok(Err(_)) => return Ok(()),
+                Err(_) => {
+                    // The timeout drops the handle, which detaches the task.
+                    // Abort would SIGKILL by dropping the child. Kill the
+                    // recorded pid instead, the same `Ok(None)` outcome.
+                    if let Some(pid) = pid {
+                        signal_kill(pid);
+                    }
+                    return Ok(());
+                }
+            }
+        }
         let Some(service) = service.as_mut() else {
             return Ok(());
         };
-        match service.close_with_timeout(timeout).await {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        match service.close_with_timeout(remaining).await {
             Ok(Some(_)) => Ok(()),
             Ok(None) => {
                 if let Some(pid) = pid {
@@ -169,26 +209,51 @@ impl StdioMcpClient {
             changed: Arc::clone(&changed),
         };
 
+        // Own the child on a task. `select!` would drop the losing `serve`
+        // future, and `ChildWithCleanup::drop` SIGKILLs outside `shutdown_within`.
+        let mut handle = tokio::spawn(async move { handler.serve(transport).await });
         let connect_timeout = self.shared.connect_timeout;
-        let served = tokio::select! {
-            biased;
-            _ = self.shared.cancel.cancelled() => {
-                return Err(Error::Cancelled);
-            }
-            result = tokio::time::timeout(connect_timeout, handler.serve(transport)) => result,
-        };
-        let service = match served {
-            Ok(Ok(service)) => service,
-            Ok(Err(err)) => return Err(self.mcp(err.to_string())),
-            Err(_) => return Err(self.mcp("connect timed out")),
-        };
-        {
-            let mut inner = self.shared.inner.lock().await;
-            inner.pid = pid;
-            inner.service = Some(service);
+        enum Stop<T> {
+            Cancelled,
+            TimedOut,
+            Joined(T),
         }
-        *lock(&self.shared.changed) = changed;
-        Ok(())
+        let stop = tokio::select! {
+            biased;
+            _ = self.shared.cancel.cancelled() => Stop::Cancelled,
+            _ = tokio::time::sleep(connect_timeout) => Stop::TimedOut,
+            result = &mut handle => Stop::Joined(result),
+        };
+        match stop {
+            Stop::Joined(Ok(Ok(service))) => {
+                let mut inner = self.shared.inner.lock().await;
+                inner.pid = pid;
+                inner.service = Some(service);
+                drop(inner);
+                *lock(&self.shared.changed) = changed;
+                Ok(())
+            }
+            Stop::Joined(Ok(Err(err))) => Err(self.mcp(err.to_string())),
+            Stop::Joined(Err(err)) => Err(self.mcp(format!("connect task: {err}"))),
+            Stop::Cancelled => {
+                let mut inner = self.shared.inner.lock().await;
+                inner.pid = pid;
+                inner.connecting = Some(handle);
+                // Park the task. `McpSupervisor::shutdown` closes it with one
+                // `shutdown_within` budget. Closing here would hold `poll_lock`
+                // for a full grace, then `shutdown` would start another.
+                Err(Error::Cancelled)
+            }
+            Stop::TimedOut => {
+                {
+                    let mut inner = self.shared.inner.lock().await;
+                    inner.pid = pid;
+                    inner.connecting = Some(handle);
+                }
+                self.shutdown_within(self.shared.grace).await?;
+                Err(self.mcp("connect timed out"))
+            }
+        }
     }
 
     pub(crate) async fn list_tools(&self) -> Result<Vec<ToolDefinition>, Error> {

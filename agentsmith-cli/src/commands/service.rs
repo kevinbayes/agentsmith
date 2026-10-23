@@ -43,6 +43,7 @@ pub(crate) struct ServiceInner {
     pub(crate) cancel: CancellationToken,
     started: Instant,
     shutdown: AtomicBool,
+    poll_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub(crate) limits: LoopLimits,
     pub(crate) max_output_tokens: u32,
 }
@@ -197,14 +198,19 @@ impl ServiceInner {
         })
     }
 
-    /// `true` when `id` is still in the map. Roots cancel their token.
-    /// A child id has no separate token here; the response is still accepted.
+    /// `true` when `id` is still known. Roots and recorded children cancel.
+    /// A live child with no token is not a false success.
     pub(crate) fn cancel_run(&self, id: RunId) -> bool {
         if let Some(root) = lock(&self.index).roots.get(&id) {
             root.cancel.cancel();
             return true;
         }
-        self.supervisor.snapshot(id).is_some()
+        if self.hub.cancel_run(id) {
+            return true;
+        }
+        self.supervisor
+            .snapshot(id)
+            .is_some_and(|snap| snap.status.is_terminal())
     }
 
     pub(crate) fn spec_hits_down(&self, spec: &agentsmith_runtime::AgentSpec) -> bool {
@@ -371,8 +377,9 @@ impl ServiceInner {
                 break;
             };
             index.roots.remove(&old);
-            // Non-terminal descendants stay. Only terminal roots are candidates.
-            self.supervisor.remove_terminal_tree(old);
+            index.idempotency.retain(|_, (_, run_id)| *run_id != old);
+            let removed = self.supervisor.remove_terminal_tree(old);
+            self.hub.forget_cancels(&removed);
         }
     }
 
@@ -417,11 +424,14 @@ pub(crate) fn paths_overlap(left: &Path, right: &Path) -> bool {
 }
 
 fn tokens_equal(expected: &[u8], presented: &[u8]) -> bool {
-    // Walk the expected token only, so a wrong length does not return early.
-    let mut diff = (expected.len() ^ presented.len()) as u8;
-    for (index, byte) in expected.iter().enumerate() {
-        let other = presented.get(index).copied().unwrap_or(*byte);
-        diff |= byte ^ other;
+    // Full-width length. A `u8` fold treats 256 and 0 as the same length.
+    let mut diff = expected.len() ^ presented.len();
+    let mut index = 0;
+    while index < expected.len() || index < presented.len() {
+        let left = expected.get(index).copied().unwrap_or(0);
+        let right = presented.get(index).copied().unwrap_or(0);
+        diff |= usize::from(left ^ right);
+        index += 1;
     }
     diff == 0
 }
@@ -517,6 +527,7 @@ impl RunningService {
                 cancel,
                 started: Instant::now(),
                 shutdown: AtomicBool::new(false),
+                poll_task: Mutex::new(None),
                 limits,
                 max_output_tokens,
             }
@@ -524,12 +535,18 @@ impl RunningService {
         if let Some(sessions) = &inner.sessions {
             match sessions.poll().await {
                 Ok(()) => {}
-                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(Error::Cancelled) => {
+                    if let Some(mcp) = &inner.mcp {
+                        let _ = mcp.shutdown().await;
+                    }
+                    return Err(Error::Cancelled);
+                }
                 Err(err) => tracing::warn!("{}", redact(&err.to_string())),
             }
         }
         if let Some(sessions) = inner.sessions.clone() {
-            spawn_poll(sessions, inner.cancel.clone());
+            let task = spawn_poll(sessions, inner.cancel.clone());
+            *lock(&inner.poll_task) = Some(task);
         }
         let listener = TcpListener::bind(bind).await?;
         let local_addr = listener.local_addr()?;
@@ -609,16 +626,22 @@ async fn accept_loop(inner: Arc<ServiceInner>, listener: TcpListener) {
         }
     }
     inner.shutdown.store(true, Ordering::Release);
-    let grace = Duration::from_secs(inner.config.service.shutdown_grace_secs);
-    let started = Instant::now();
     inner.cancel_all();
+    let poll_task = lock(&inner.poll_task).take();
+    if let Some(task) = poll_task {
+        let _ = task.await;
+    }
+    // `shutdown` is the one close budget. A timeout around it drops
+    // `close_with_timeout` before `Ok(None)` can SIGKILL the recorded pid.
     if let Some(mcp) = &inner.mcp {
-        let budget = grace.saturating_sub(started.elapsed());
-        let _ = tokio::time::timeout(budget, mcp.shutdown()).await;
+        let _ = mcp.shutdown().await;
     }
 }
 
-fn spawn_poll(sessions: Arc<dyn SessionPoll>, cancel: CancellationToken) {
+fn spawn_poll(
+    sessions: Arc<dyn SessionPoll>,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -637,12 +660,11 @@ fn spawn_poll(sessions: Arc<dyn SessionPoll>, cancel: CancellationToken) {
                 }
             }
         }
-    });
+    })
 }
 
 pub fn execute(config_path: Option<&Path>) -> Result<ExitCode, Error> {
     let config = agentsmith_core::config::load(config_path)?;
-    init_tracing(config.harness.log_level);
     let llm = OpenAiCompatible::new(
         &config.llm.base_url,
         config.llm.api_key.clone(),
@@ -711,6 +733,19 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 mod tests {
     use super::*;
     use agentsmith_core::config::{McpServerConfig, ToolsConfig};
+
+    #[test]
+    fn bearer_compare_rejects_length_aliases() {
+        let token = vec![1u8; 300];
+        assert!(tokens_equal(&token, &token));
+        assert!(!tokens_equal(&token, &token[..44]));
+        assert!(!tokens_equal(&token, &[]));
+        assert!(!tokens_equal(&[0u8; 256], &[]));
+        assert!(!tokens_equal(b"secret", b""));
+        assert!(!tokens_equal(b"secret", b"secre"));
+        assert!(!tokens_equal(b"secret", b"secretEXTRA"));
+        assert!(tokens_equal(b"", b""));
+    }
     use agentsmith_llm::{Completion, CompletionRequest, Message, StopReason};
     use serde_json::Value;
     use std::sync::atomic::AtomicU64;

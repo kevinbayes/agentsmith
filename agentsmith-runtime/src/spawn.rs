@@ -85,7 +85,7 @@ pub struct CallerGuard {
 impl Drop for CallerGuard {
     fn drop(&mut self) {
         lock(&self.spawner.callers).remove(&self.run_id);
-        if let Some(hub) = self.spawner.hub() {
+        if let Some(hub) = &self.spawner.hub {
             lock(&hub.routes).remove(&self.run_id);
         }
     }
@@ -97,13 +97,35 @@ impl Drop for CallerGuard {
 /// the same hub; foreground runs leave it unset and keep a direct tool.
 pub struct SpawnHub {
     routes: Mutex<BTreeMap<RunId, Weak<SubagentSpawner>>>,
+    cancels: Mutex<BTreeMap<RunId, CancellationToken>>,
 }
 
 impl SpawnHub {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             routes: Mutex::new(BTreeMap::new()),
+            cancels: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    pub(crate) fn track_cancel(&self, run_id: RunId, cancel: CancellationToken) {
+        lock(&self.cancels).insert(run_id, cancel);
+    }
+
+    /// Cancel a child recorded by `track_cancel`. `false` if this id was never tracked.
+    pub fn cancel_run(&self, run_id: RunId) -> bool {
+        let Some(cancel) = lock(&self.cancels).get(&run_id).cloned() else {
+            return false;
+        };
+        cancel.cancel();
+        true
+    }
+
+    pub fn forget_cancels(&self, ids: &[RunId]) {
+        let mut cancels = lock(&self.cancels);
+        for id in ids {
+            cancels.remove(id);
+        }
     }
 }
 
@@ -165,6 +187,7 @@ pub struct SpawnerConfig {
     pub limits: crate::loop_::LoopLimits,
     pub events: Arc<dyn RunEvents>,
     pub sessions: Option<Arc<dyn SessionPoll>>,
+    pub hub: Option<Arc<SpawnHub>>,
 }
 
 pub struct SubagentSpawner {
@@ -183,7 +206,7 @@ pub struct SubagentSpawner {
     sessions: Option<Arc<dyn SessionPoll>>,
     live: Arc<LiveSlots>,
     callers: Mutex<BTreeMap<RunId, CallerInfo>>,
-    hub: Mutex<Option<Arc<SpawnHub>>>,
+    hub: Option<Arc<SpawnHub>>,
 }
 
 impl SubagentSpawner {
@@ -204,30 +227,20 @@ impl SubagentSpawner {
             events: config.events,
             sessions: config.sessions,
             callers: Mutex::new(BTreeMap::new()),
-            hub: Mutex::new(None),
+            hub: config.hub,
         })
-    }
-
-    /// Service runs share one registry. The tool is registered once and looks
-    /// the caller up in `hub`.
-    pub fn attach_hub(&self, hub: Arc<SpawnHub>) {
-        *lock(&self.hub) = Some(hub);
-    }
-
-    fn hub(&self) -> Option<Arc<SpawnHub>> {
-        lock(&self.hub).clone()
     }
 
     /// Register `spawn_subagents` on the process map. The tool holds a `Weak`
     /// so the registry and the spawner do not keep each other alive.
     pub fn install(self: &Arc<Self>) -> Result<(), Error> {
-        if let Some(hub) = self.hub() {
+        if let Some(hub) = &self.hub {
             if self.registry.get(SPAWN_SUBAGENTS).is_some() {
                 return Ok(());
             }
             return match self
                 .registry
-                .register(Arc::new(SpawnSubagents::hub(Arc::clone(&hub))))
+                .register(Arc::new(SpawnSubagents::hub(Arc::clone(hub))))
             {
                 Ok(()) => Ok(()),
                 Err(_) if self.registry.get(SPAWN_SUBAGENTS).is_some() => Ok(()),
@@ -255,7 +268,7 @@ impl SubagentSpawner {
                 system_prompt,
             },
         );
-        if let Some(hub) = self.hub() {
+        if let Some(hub) = &self.hub {
             lock(&hub.routes).insert(run_id, Arc::downgrade(self));
         }
         CallerGuard {
@@ -330,6 +343,9 @@ impl SubagentSpawner {
             }
             let run_id = agentsmith_core::id::new_id();
             let cancel = request.cancel.child_token();
+            if let Some(hub) = &self.hub {
+                hub.track_cancel(run_id, cancel.clone());
+            }
             let spec = child_spec(
                 &self.spec,
                 &parent_prompt,
@@ -1005,6 +1021,18 @@ fn tool_error(kind: ToolErrorKind, message: impl Into<String>) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hub_cancel_fires_the_recorded_child_token() {
+        let hub = SpawnHub::new();
+        let token = CancellationToken::new();
+        let id = agentsmith_core::id::new_id();
+        hub.track_cancel(id, token.clone());
+        assert!(hub.cancel_run(id));
+        assert!(token.is_cancelled());
+        hub.forget_cancels(&[id]);
+        assert!(!hub.cancel_run(id));
+    }
 
     #[test]
     fn cut_bytes_stops_on_a_char_boundary() {

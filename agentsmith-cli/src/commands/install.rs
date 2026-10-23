@@ -83,13 +83,22 @@ pub fn render_unit(spec: &UnitSpec<'_>) -> String {
     } else {
         "default.target"
     };
+    // A user unit serves a workdir under /home. ProtectHome belongs on the
+    // system unit only, where the account is `agentsmith`.
+    let protect_home = if spec.system {
+        "\
+# ProtectHome=read-only breaks a system service whose workdir is under /home. The system unit is for the agentsmith user. Developers use the user unit.
+ProtectHome=read-only
+"
+    } else {
+        ""
+    };
     format!(
         "\
 [Unit]
 Description=AgentSmith service
 After=network-online.target
 Wants=network-online.target
-# ProtectHome=read-only breaks a system service whose workdir is under /home. The system unit is for the agentsmith user. Developers use the user unit.
 
 [Service]
 Type=simple
@@ -100,7 +109,7 @@ Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=full
-ProtectHome=read-only
+{protect_home}\
 ReadWritePaths={data} {config_dir}
 {account}\
 [Install]
@@ -110,6 +119,7 @@ WantedBy={wanted}
         config = unit_arg(spec.config),
         data = unit_arg(spec.data_dir),
         config_dir = unit_arg(spec.config_dir),
+        protect_home = protect_home,
         account = account,
         wanted = wanted,
     )
@@ -238,14 +248,15 @@ pub fn perform_install(
         chown_agentsmith(&paths.data_dir)?;
     }
     let token = seed_if_absent(&paths)?;
+    // Print before systemctl. A later failure must not hide the only copy.
+    if let Some(token) = &token {
+        writeln!(stdout, "{token}")?;
+    }
     for argv in &argvs[systemctl_at..] {
         let output = exec(argv);
         if output.code != 0 {
             return Err(command_failed(argv, &output));
         }
-    }
-    if let Some(token) = &token {
-        writeln!(stdout, "{token}")?;
     }
     if request.scope == Scope::User {
         linger_hint(stdout)?;
@@ -371,7 +382,15 @@ pub fn write_seed_file(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    // Mode is applied in the same open. chmod after create leaves 0644 under umask 022.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(mode);
+    }
+    let mut file = match options.open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
         Err(err) => return Err(err.into()),
@@ -438,23 +457,7 @@ fn generate_token() -> Result<String, Error> {
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes)
         .map_err(|err| Error::Io(std::io::Error::other(err.to_string())))?;
-    let token = hex_encode(&bytes);
-    if !valid_token(&token) {
-        return Err(Error::Config(
-            "refusing to write an empty service token".into(),
-        ));
-    }
-    Ok(token)
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0xf) as usize] as char);
-    }
-    out
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn ensure_dir(path: &Path, mode: u32) -> Result<(), Error> {
@@ -622,7 +625,6 @@ mod tests {
                 "RestartSec=5",
                 "NoNewPrivileges=true",
                 "ProtectSystem=full",
-                "ProtectHome=read-only",
                 "Environment=RUST_LOG=info",
                 "Type=simple",
             ] {
@@ -637,15 +639,22 @@ mod tests {
                     || unit.contains(&format!("WorkingDirectory={}", system.data_dir.display()))
             );
             assert!(unit.contains("ReadWritePaths="));
-            assert!(
-                unit.lines().any(|line| {
-                    line.starts_with('#')
-                        && line.contains("ProtectHome=read-only")
-                        && line.contains("/home")
-                }),
-                "{unit}"
-            );
         }
+        assert!(
+            !user_unit.contains("ProtectHome"),
+            "user unit must not pin ProtectHome: {user_unit}"
+        );
+        assert!(system_unit
+            .lines()
+            .any(|line| line == "ProtectHome=read-only"));
+        assert!(
+            system_unit.lines().any(|line| {
+                line.starts_with('#')
+                    && line.contains("ProtectHome=read-only")
+                    && line.contains("/home")
+            }),
+            "{system_unit}"
+        );
         assert!(!user_unit
             .lines()
             .any(|line| line.starts_with("User=") || line.starts_with("Group=")));

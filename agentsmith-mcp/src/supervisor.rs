@@ -93,6 +93,9 @@ impl McpSupervisor {
 
     /// Close every session, sharing one grace deadline. Later sessions get the remainder.
     pub async fn shutdown(&self) -> Result<(), Error> {
+        // Connect parks its child before releasing this lock. Closing first
+        // would miss that child, or race an in-flight poll.
+        let _poll = self.poll_lock.lock().await;
         let deadline = Instant::now() + self.grace;
         let clients = {
             let servers = lock(&self.servers);

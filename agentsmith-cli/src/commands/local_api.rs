@@ -130,6 +130,9 @@ async fn create_run(
         Ok(model) => model,
         Err(err) => return error(StatusCode::BAD_REQUEST, &err.to_string()),
     };
+    if inner.config.llm.api_key.is_empty() {
+        return error(StatusCode::BAD_REQUEST, "llm.api_key is required to run");
+    }
     let workdir_path = match body.workdir.as_deref() {
         Some(path) => Path::new(path).to_path_buf(),
         None => inner.config.harness.workdir.clone(),
@@ -237,17 +240,10 @@ fn idempotency_of(headers: &header::HeaderMap) -> Option<String> {
 pub(crate) fn body_hash(value: &serde_json::Value) -> String {
     // `serde_json::Map` is a `BTreeMap`, so this is compact JSON with sorted keys.
     let canonical = serde_json::to_string(value).unwrap_or_default();
-    hex_encode(&Sha256::digest(canonical.as_bytes()))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0xf) as usize] as char);
-    }
-    out
+    Sha256::digest(canonical.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 async fn read_body(req: Request<Incoming>) -> Result<Bytes, ()> {

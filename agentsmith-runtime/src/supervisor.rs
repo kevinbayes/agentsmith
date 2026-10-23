@@ -86,11 +86,7 @@ impl Supervisor {
 
     /// Drop a terminal `root` and its terminal descendants.
     ///
-    /// Non-terminal runs stay. The first terminal status of a run that stays
-    /// is unchanged. Older terminal roots are the only eviction candidates.
-    /// Parent scan is O(n²). The service keeps ≤8 live roots, 32 terminal
-    /// roots, and their descendants (live children ≤32). Index by parent if
-    /// that cap grows past a few hundred runs.
+    /// Non-terminal descendants stay so an in-flight child is not dropped with its root.
     pub fn remove_terminal_tree(&self, root: RunId) -> Vec<RunId> {
         let mut runs = lock(&self.runs);
         let mut tree = vec![root];

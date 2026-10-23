@@ -114,10 +114,8 @@ pub async fn run_admitted(params: AdmittedRun) -> Result<RunOutcome, Error> {
         limits: limits.clone(),
         events: Arc::clone(&events),
         sessions: sessions.clone(),
+        hub: params.spawn_hub,
     });
-    if let Some(hub) = params.spawn_hub {
-        spawner.attach_hub(hub);
-    }
     spawner.install()?;
     if let Some(names) = params.spec.subagent_tools.as_deref() {
         // The step view, after the depth drop. A spawned view at depth 1 still

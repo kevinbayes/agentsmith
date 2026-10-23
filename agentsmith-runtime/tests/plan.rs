@@ -219,6 +219,7 @@ fn harness(spec: AgentSpec, limits: LoopLimits, steps: Vec<Queued>) -> World {
         limits: limits.clone(),
         events: supervisor.clone() as Arc<dyn RunEvents>,
         sessions: None,
+        hub: None,
     });
     spawner.install().unwrap();
     World {
@@ -549,6 +550,7 @@ async fn root_cancel_does_not_aggregate_and_skips_creating_the_next_run() {
         limits: limits.clone(),
         events: supervisor.clone() as Arc<dyn RunEvents>,
         sessions: None,
+        hub: None,
     });
     spawner.install().unwrap();
     let run_id = agentsmith_core::id::new_id();
@@ -1213,6 +1215,7 @@ async fn a_child_that_ignores_cancel_releases_its_slot_after_grace() {
         limits: limits.clone(),
         events: supervisor.clone() as Arc<dyn RunEvents>,
         sessions: None,
+        hub: None,
     });
     spawner.install().unwrap();
     let before = spawner.live();
@@ -1276,6 +1279,7 @@ async fn a_panicked_child_writes_one_terminal_finished_line() {
         limits: limits.clone(),
         events: supervisor.clone() as Arc<dyn RunEvents>,
         sessions: None,
+        hub: None,
     });
     spawner.install().unwrap();
     let before = spawner.live();

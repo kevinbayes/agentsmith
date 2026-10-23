@@ -3,6 +3,7 @@
 //! `SpawnRequest.child_depth` is the depth to store. This module does not add 1.
 //! Only the tool passes `caller.depth + 1`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -84,6 +85,25 @@ pub struct CallerGuard {
 impl Drop for CallerGuard {
     fn drop(&mut self) {
         lock(&self.spawner.callers).remove(&self.run_id);
+        if let Some(hub) = self.spawner.hub() {
+            lock(&hub.routes).remove(&self.run_id);
+        }
+    }
+}
+
+/// Routes `spawn_subagents` to the spawner that owns the calling run.
+///
+/// One shared registry cannot register the tool twice. Service runs attach
+/// the same hub; foreground runs leave it unset and keep a direct tool.
+pub struct SpawnHub {
+    routes: Mutex<BTreeMap<RunId, Weak<SubagentSpawner>>>,
+}
+
+impl SpawnHub {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            routes: Mutex::new(BTreeMap::new()),
+        })
     }
 }
 
@@ -162,7 +182,8 @@ pub struct SubagentSpawner {
     events: Arc<dyn RunEvents>,
     sessions: Option<Arc<dyn SessionPoll>>,
     live: Arc<LiveSlots>,
-    callers: Mutex<std::collections::BTreeMap<RunId, CallerInfo>>,
+    callers: Mutex<BTreeMap<RunId, CallerInfo>>,
+    hub: Mutex<Option<Arc<SpawnHub>>>,
 }
 
 impl SubagentSpawner {
@@ -182,15 +203,39 @@ impl SubagentSpawner {
             limits: config.limits,
             events: config.events,
             sessions: config.sessions,
-            callers: Mutex::new(std::collections::BTreeMap::new()),
+            callers: Mutex::new(BTreeMap::new()),
+            hub: Mutex::new(None),
         })
+    }
+
+    /// Service runs share one registry. The tool is registered once and looks
+    /// the caller up in `hub`.
+    pub fn attach_hub(&self, hub: Arc<SpawnHub>) {
+        *lock(&self.hub) = Some(hub);
+    }
+
+    fn hub(&self) -> Option<Arc<SpawnHub>> {
+        lock(&self.hub).clone()
     }
 
     /// Register `spawn_subagents` on the process map. The tool holds a `Weak`
     /// so the registry and the spawner do not keep each other alive.
     pub fn install(self: &Arc<Self>) -> Result<(), Error> {
+        if let Some(hub) = self.hub() {
+            if self.registry.get(SPAWN_SUBAGENTS).is_some() {
+                return Ok(());
+            }
+            return match self
+                .registry
+                .register(Arc::new(SpawnSubagents::hub(Arc::clone(&hub))))
+            {
+                Ok(()) => Ok(()),
+                Err(_) if self.registry.get(SPAWN_SUBAGENTS).is_some() => Ok(()),
+                Err(err) => Err(err),
+            };
+        }
         self.registry
-            .register(Arc::new(SpawnSubagents::new(Arc::downgrade(self))))
+            .register(Arc::new(SpawnSubagents::direct(Arc::downgrade(self))))
     }
 
     pub fn live(&self) -> usize {
@@ -210,6 +255,9 @@ impl SubagentSpawner {
                 system_prompt,
             },
         );
+        if let Some(hub) = self.hub() {
+            lock(&hub.routes).insert(run_id, Arc::downgrade(self));
+        }
         CallerGuard {
             spawner: Arc::clone(self),
             run_id,
@@ -767,13 +815,35 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|err| err.into_inner())
 }
 
+enum SpawnLink {
+    Direct(Weak<SubagentSpawner>),
+    Hub(Arc<SpawnHub>),
+}
+
 struct SpawnSubagents {
-    spawner: Weak<SubagentSpawner>,
+    link: SpawnLink,
 }
 
 impl SpawnSubagents {
-    fn new(spawner: Weak<SubagentSpawner>) -> Self {
-        Self { spawner }
+    fn direct(spawner: Weak<SubagentSpawner>) -> Self {
+        Self {
+            link: SpawnLink::Direct(spawner),
+        }
+    }
+
+    fn hub(hub: Arc<SpawnHub>) -> Self {
+        Self {
+            link: SpawnLink::Hub(hub),
+        }
+    }
+
+    fn resolve(&self, run_id: RunId) -> Option<Arc<SubagentSpawner>> {
+        match &self.link {
+            SpawnLink::Direct(spawner) => spawner.upgrade(),
+            SpawnLink::Hub(hub) => lock(&hub.routes)
+                .get(&run_id)
+                .and_then(|spawner| spawner.upgrade()),
+        }
     }
 }
 
@@ -831,7 +901,7 @@ impl Tool for SpawnSubagents {
 
     async fn call(&self, ctx: ToolCtx, arguments: Value) -> Result<ToolOutput, Error> {
         // Do not take the registry lock. The join awaits child runs that call tools.
-        let Some(spawner) = self.spawner.upgrade() else {
+        let Some(spawner) = self.resolve(ctx.run_id) else {
             return Err(tool_error(
                 ToolErrorKind::Execution,
                 "spawn_subagents is unavailable",

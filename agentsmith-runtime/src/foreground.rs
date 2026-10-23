@@ -6,11 +6,11 @@ use agentsmith_core::config::{Config, ToolsConfig};
 use agentsmith_core::Error;
 use agentsmith_tools::{register_builtins, BuiltinLimits, SessionPoll, ToolRegistry};
 
-use crate::loop_::{LoopLimits, RunContext, RunEvents, RunOutcome};
+use crate::loop_::{LoopLimits, RunContext, RunEvents, RunId, RunOutcome};
 use crate::plan::PlanExecuteLoop;
 use crate::react::ReactLoop;
 use crate::run_tools::{RunKind, RunTools, ToolFilter};
-use crate::spawn::{SpawnerConfig, SubagentSpawner};
+use crate::spawn::{SpawnHub, SpawnerConfig, SubagentSpawner};
 use crate::spec::{AgentSpec, LoopMode};
 use crate::supervisor::Supervisor;
 use crate::transcript::Transcript;
@@ -39,11 +39,64 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
         None => ToolRegistry::new(),
     };
     register_foreground_builtins(&registry, &params.config.tools)?;
-    let sessions = params.sessions.clone();
     let max_output_tokens = u32::try_from(params.config.llm.max_output_tokens)
         .map_err(|_| Error::Config("llm.max_output_tokens does not fit in u32".into()))?;
     let limits = LoopLimits::from_config(&params.config.loop_)?;
+    let sessions = params.sessions.clone();
+    // Required connect failure must not open a transcript or start the loop.
+    if let Some(sessions) = &sessions {
+        sessions.poll().await?;
+    }
     let events: Arc<dyn RunEvents> = Arc::new(Supervisor::new());
+    run_admitted(AdmittedRun {
+        run_id: agentsmith_core::id::new_id(),
+        task: params.task,
+        spec: params.spec,
+        config: params.config,
+        model: params.model,
+        workdir: params.workdir,
+        llm: params.llm,
+        cancel: params.cancel,
+        mode: params.mode,
+        registry,
+        sessions,
+        events,
+        max_output_tokens,
+        limits,
+        spawn_hub: None,
+    })
+    .await
+}
+
+/// One root run on a registry and supervisor the caller already owns.
+///
+/// Does not register builtins and does not poll. Foreground does both before
+/// calling this, and treats that first poll as fatal. The service polls on
+/// its own and keeps running when the first poll fails.
+pub struct AdmittedRun {
+    pub run_id: RunId,
+    pub task: String,
+    pub spec: AgentSpec,
+    pub config: Config,
+    pub model: String,
+    pub workdir: PathBuf,
+    pub llm: Arc<dyn agentsmith_llm::Llm>,
+    pub cancel: CancellationToken,
+    pub mode: LoopMode,
+    pub registry: ToolRegistry,
+    pub sessions: Option<Arc<dyn SessionPoll>>,
+    pub events: Arc<dyn RunEvents>,
+    pub max_output_tokens: u32,
+    pub limits: LoopLimits,
+    /// Set when several runs share `registry`. `None` registers a direct tool.
+    pub spawn_hub: Option<Arc<SpawnHub>>,
+}
+
+pub async fn run_admitted(params: AdmittedRun) -> Result<RunOutcome, Error> {
+    let registry = params.registry;
+    let sessions = params.sessions;
+    let events = params.events;
+    let limits = params.limits;
     let data_dir = params.config.harness.data_dir.clone();
     let allow = params.config.tools.allow.clone();
     // Install before the root view is resolved so the intersection can drop it.
@@ -51,7 +104,7 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
         registry: registry.clone(),
         llm: Arc::clone(&params.llm),
         model: params.model.clone(),
-        max_output_tokens,
+        max_output_tokens: params.max_output_tokens,
         temperature: params.config.llm.temperature,
         max_output_bytes: params.config.tools.max_output_bytes,
         workdir: params.workdir.clone(),
@@ -62,11 +115,10 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
         events: Arc::clone(&events),
         sessions: sessions.clone(),
     });
-    spawner.install()?;
-    // Required connect failure must not open a transcript or start the loop.
-    if let Some(sessions) = &sessions {
-        sessions.poll().await?;
+    if let Some(hub) = params.spawn_hub {
+        spawner.attach_hub(hub);
     }
+    spawner.install()?;
     if let Some(names) = params.spec.subagent_tools.as_deref() {
         // The step view, after the depth drop. A spawned view at depth 1 still
         // lists spawn_subagents when max_subagent_depth is 0.
@@ -90,7 +142,7 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
         }
     }
     let tools = RunTools::resolve(registry, allow.as_deref(), params.spec.tools.as_deref())?;
-    let run_id = agentsmith_core::id::new_id();
+    let run_id = params.run_id;
     let transcript = Transcript::with_log(&data_dir, run_id).map_err(|err| match err {
         Error::Io(err) => Error::Config(format!("data_dir: {err}")),
         other => other,
@@ -108,7 +160,7 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
         task: params.task,
         extra_context: None,
         model: params.model,
-        max_output_tokens,
+        max_output_tokens: params.max_output_tokens,
         temperature: params.config.llm.temperature,
         max_output_bytes: params.config.tools.max_output_bytes,
         max_iterations,

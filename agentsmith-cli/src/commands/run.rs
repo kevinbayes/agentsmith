@@ -83,7 +83,7 @@ pub fn execute(
     Ok(exit_code(outcome.status))
 }
 
-fn resolve_model(
+pub(crate) fn resolve_model(
     spec: &agentsmith_runtime::AgentSpec,
     config_model: &str,
 ) -> Result<String, Error> {
@@ -129,7 +129,7 @@ fn block_on(
     })
 }
 
-async fn cancel_on_signal(cancel: CancellationToken) {
+pub(crate) async fn cancel_on_signal(cancel: CancellationToken) {
     #[cfg(unix)]
     {
         let mut sigterm =

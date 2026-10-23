@@ -11,9 +11,21 @@ path = "src/main.rs"
 
 [dependencies]
 agentsmith-core.workspace = true
+async-trait.workspace = true
 agentsmith-llm.workspace = true
 agentsmith-mcp.workspace = true
 agentsmith-runtime.workspace = true
 agentsmith-tools.workspace = true
+bytes.workspace = true
 clap.workspace = true
+getrandom.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -24,11 +24,14 @@ enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
-    /// Run one task in the foreground.
+    /// Run one task in the foreground, or start the loopback service.
     Run {
         /// Task text for the agent.
-        #[arg(long)]
-        task: String,
+        #[arg(long, conflicts_with = "service")]
+        task: Option<String>,
+        /// Long-running loopback service. Does not start a task.
+        #[arg(long, conflicts_with_all = ["task", "mode", "spec", "workdir"])]
+        service: bool,
         /// Loop mode. Required unless the spec sets mode.
         #[arg(long, value_enum)]
         mode: Option<ModeArg>,
@@ -38,6 +41,30 @@ enum Command {
         /// Working directory. Defaults to harness.workdir.
         #[arg(long, value_name = "PATH")]
         workdir: Option<PathBuf>,
+    },
+    /// Install the systemd unit and seed a config if one is absent.
+    Install {
+        /// Install the user unit. This is the default.
+        #[arg(long, conflicts_with = "system")]
+        user: bool,
+        /// Install the system unit.
+        #[arg(long, conflicts_with = "user")]
+        system: bool,
+        /// Enable the unit without starting it.
+        #[arg(long)]
+        no_start: bool,
+    },
+    /// Remove the systemd unit. `--purge` also deletes the data directory.
+    Uninstall {
+        /// Remove the user unit. This is the default.
+        #[arg(long, conflicts_with = "system")]
+        user: bool,
+        /// Remove the system unit.
+        #[arg(long, conflicts_with = "user")]
+        system: bool,
+        /// Delete the data directory after the unit is gone.
+        #[arg(long)]
+        purge: bool,
     },
 }
 
@@ -69,10 +96,21 @@ fn main() -> ExitCode {
         },
         Command::Run {
             task,
+            service,
             mode,
             spec,
             workdir,
         } => {
+            if service {
+                return match commands::service::execute(cli.config.as_deref()) {
+                    Ok(code) => code,
+                    Err(err) => fail(err),
+                };
+            }
+            let Some(task) = task else {
+                eprintln!("error: run requires --task or --service");
+                return ExitCode::from(2);
+            };
             let mode = mode.map(|value| match value {
                 ModeArg::React => agentsmith_runtime::LoopMode::React,
                 ModeArg::Plan => agentsmith_runtime::LoopMode::Plan,
@@ -85,14 +123,37 @@ fn main() -> ExitCode {
                 workdir.as_deref(),
             ) {
                 Ok(code) => code,
-                Err(err) => {
-                    eprintln!("error: {err}");
-                    match err {
-                        Error::Config(_) => ExitCode::from(2),
-                        _ => ExitCode::from(1),
-                    }
-                }
+                Err(err) => fail(err),
             }
         }
+        Command::Install {
+            user: _,
+            system,
+            no_start,
+        } => match commands::install::execute_install(system, no_start) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => fail(err),
+        },
+        Command::Uninstall {
+            user: _,
+            system,
+            purge,
+        } => match commands::install::execute_uninstall(system, purge) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => fail(err),
+        },
+    }
+}
+
+fn fail(err: Error) -> ExitCode {
+    // The non-Linux guard is specified as this exact sentence, with no prefix.
+    if err.to_string().contains(commands::install::LINUX_ONLY) {
+        eprintln!("{}", commands::install::LINUX_ONLY);
+        return ExitCode::from(2);
+    }
+    eprintln!("error: {err}");
+    match err {
+        Error::Config(_) => ExitCode::from(2),
+        _ => ExitCode::from(1),
     }
 }

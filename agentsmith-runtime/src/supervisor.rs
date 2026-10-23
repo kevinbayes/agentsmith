@@ -83,6 +83,39 @@ impl Supervisor {
             .map(|(run_id, state)| state.snapshot(*run_id))
             .collect()
     }
+
+    /// Drop a terminal `root` and its terminal descendants.
+    ///
+    /// Non-terminal runs stay. The first terminal status of a run that stays
+    /// is unchanged. Older terminal roots are the only eviction candidates.
+    /// Parent scan is O(n²). The service keeps ≤8 live roots, 32 terminal
+    /// roots, and their descendants (live children ≤32). Index by parent if
+    /// that cap grows past a few hundred runs.
+    pub fn remove_terminal_tree(&self, root: RunId) -> Vec<RunId> {
+        let mut runs = lock(&self.runs);
+        let mut tree = vec![root];
+        let mut index = 0;
+        while index < tree.len() {
+            let id = tree[index];
+            for (child, state) in runs.iter() {
+                if state.parent_run_id == Some(id) && !tree.contains(child) {
+                    tree.push(*child);
+                }
+            }
+            index += 1;
+        }
+        let mut removed = Vec::new();
+        for id in tree {
+            let terminal = runs
+                .get(&id)
+                .is_some_and(|state| state.status.is_terminal());
+            if terminal {
+                runs.remove(&id);
+                removed.push(id);
+            }
+        }
+        removed
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -205,5 +238,47 @@ mod tests {
         assert_eq!(snap.depth, 1);
         assert_eq!(snap.iteration, 0);
         assert_eq!(snap.max_iterations, 8);
+    }
+
+    #[test]
+    fn remove_terminal_tree_drops_terminal_descendants_and_keeps_live_ones() {
+        let supervisor = Supervisor::new();
+        let root = agentsmith_core::id::new_id();
+        let child = agentsmith_core::id::new_id();
+        let live = agentsmith_core::id::new_id();
+        supervisor.record_terminal(root, RunStatus::Failed, Some("mcp_down".into()));
+        {
+            let mut runs = lock(&supervisor.runs);
+            runs.insert(
+                child,
+                RunState {
+                    parent_run_id: Some(root),
+                    status: RunStatus::Succeeded,
+                    ..RunState::running()
+                },
+            );
+            runs.insert(
+                live,
+                RunState {
+                    parent_run_id: Some(root),
+                    status: RunStatus::Running,
+                    ..RunState::running()
+                },
+            );
+        }
+        let removed = supervisor.remove_terminal_tree(root);
+        assert!(removed.contains(&root));
+        assert!(removed.contains(&child));
+        assert!(!removed.contains(&live));
+        assert!(supervisor.snapshot(root).is_none());
+        assert!(supervisor.snapshot(child).is_none());
+        assert_eq!(
+            supervisor.snapshot(live).unwrap().status,
+            RunStatus::Running
+        );
+        let kept = agentsmith_core::id::new_id();
+        supervisor.record_terminal(kept, RunStatus::TimedOut, Some("timeout".into()));
+        let stuck = supervisor.record_terminal(kept, RunStatus::Cancelled, None);
+        assert_eq!(stuck, (RunStatus::TimedOut, Some("timeout".into())));
     }
 }

@@ -12,14 +12,15 @@ mod spec;
 mod supervisor;
 mod transcript;
 
-pub use foreground::{run_foreground, ForegroundParams};
+pub use foreground::{run_admitted, run_foreground, AdmittedRun, ForegroundParams};
 pub use loop_::{LoopLimits, Phase, RunContext, RunEvents, RunId, RunMeta, RunOutcome, RunStatus};
 pub use plan::PlanExecuteLoop;
 pub use react::ReactLoop;
 pub use run_tools::{RunKind, RunTools, ToolFilter};
 pub use snapshot::RunSnapshot;
 pub use spawn::{
-    ChildOrigin, ChildOutcome, ChildSpec, JoinOutcome, SpawnRequest, SpawnerConfig, SubagentSpawner,
+    ChildOrigin, ChildOutcome, ChildSpec, JoinOutcome, SpawnHub, SpawnRequest, SpawnerConfig,
+    SubagentSpawner,
 };
 pub use spec::{load_spec, resolve_mode, AgentSpec, LoopMode};
 pub use supervisor::Supervisor;

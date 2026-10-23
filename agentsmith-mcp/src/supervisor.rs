@@ -176,6 +176,15 @@ impl McpSupervisor {
             .unwrap_or(0)
     }
 
+    /// Names whose session status is down. This is the only status query.
+    pub fn down_servers(&self) -> Vec<String> {
+        lock(&self.servers)
+            .iter()
+            .filter(|(_, slot)| slot.status == Status::Down)
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
     async fn poll_server(&self, name: &str) -> Result<(), Error> {
         let (up, waiting, client) = {
             let servers = lock(&self.servers);

@@ -4,10 +4,7 @@ members = [
     "agentsmith-core",
     "agentsmith-llm",
     "agentsmith-tools",
-<<<<<<< HEAD
-=======
     "agentsmith-runtime",
->>>>>>> 443dc80 (ReAct loop and foreground run)
     "agentsmith-cli",
 ]
 

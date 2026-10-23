@@ -6,15 +6,13 @@ use agentsmith_llm::{
 };
 use agentsmith_tools::ToolCtx;
 
-use crate::loop_::{AgentLoop, RunContext, RunEvents, RunOutcome, RunStatus};
+use crate::loop_::{RunContext, RunEvents, RunOutcome, RunStatus};
 
-/// Swarm loop with an explicit stop table. It does not spawn subagents.
 #[derive(Debug, Default)]
 pub struct ReactLoop;
 
-#[async_trait::async_trait]
-impl AgentLoop for ReactLoop {
-    async fn run(&self, ctx: RunContext) -> Result<RunOutcome, Error> {
+impl ReactLoop {
+    pub async fn run(&self, ctx: RunContext) -> Result<RunOutcome, Error> {
         react(ctx).await
     }
 }
@@ -39,19 +37,6 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
     let mut iteration = 0u32;
     let mut consecutive_errors = 0u32;
 
-    // A cap of zero means the run cannot take a model turn.
-    if max_iters == 0 {
-        return stop(
-            &mut ctx,
-            &events,
-            RunStatus::MaxIterations,
-            "max iterations",
-            Some("max_iterations"),
-            iteration,
-        )
-        .await;
-    }
-
     loop {
         if cancel.is_cancelled() {
             return stop(
@@ -60,6 +45,18 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
                 RunStatus::Cancelled,
                 "cancelled",
                 None,
+                iteration,
+            )
+            .await;
+        }
+        // A cap of zero means the run cannot take a model turn.
+        if max_iters == 0 {
+            return stop(
+                &mut ctx,
+                &events,
+                RunStatus::MaxIterations,
+                "max iterations",
+                Some("max_iterations"),
                 iteration,
             )
             .await;
@@ -198,12 +195,13 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
                 arguments,
                 ..
             } = call;
-            let (observation, finish_answer) = match arguments {
+            let (observation, finish_answer, errored) = match arguments {
                 None => {
                     consecutive_errors = consecutive_errors.saturating_add(1);
                     (
                         observation_err("invalid_args", "invalid tool arguments"),
                         None,
+                        true,
                     )
                 }
                 Some(_) if ctx.tools.get(&name).is_none() => {
@@ -211,10 +209,10 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
                     (
                         observation_err("not_found", format!("no such tool: {name}")),
                         None,
+                        true,
                     )
                 }
                 Some(arguments) => {
-                    events.tool_used(ctx.run_id, &name).await;
                     let tool_ctx = ToolCtx {
                         run_id: ctx.run_id,
                         workdir: ctx.workdir.clone(),
@@ -226,19 +224,19 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
                             let (observation, capped) =
                                 observation_ok(&output.content, ctx.max_output_bytes);
                             let answer = (name == "finish").then_some(capped);
-                            (observation, answer)
+                            (observation, answer, false)
                         }
                         Err(Error::Tool { kind, message, .. }) => {
                             consecutive_errors = consecutive_errors.saturating_add(1);
-                            (observation_err(&kind.to_string(), message), None)
+                            (observation_err(&kind.to_string(), message), None, true)
                         }
                         Err(Error::Cancelled) => {
                             consecutive_errors = consecutive_errors.saturating_add(1);
-                            (observation_err("cancelled", "cancelled"), None)
+                            (observation_err("cancelled", "cancelled"), None, true)
                         }
                         Err(err) => {
                             consecutive_errors = consecutive_errors.saturating_add(1);
-                            (observation_err("execution", err.to_string()), None)
+                            (observation_err("execution", err.to_string()), None, true)
                         }
                     }
                 }
@@ -270,7 +268,9 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
                 )
                 .await;
             }
-            if consecutive_errors >= max_errors {
+            // A success resets the counter to 0. With a cap of 0, `0 >= 0` would
+            // fail that success, so the cap applies only to an error observation.
+            if errored && consecutive_errors >= max_errors {
                 return stop(
                     &mut ctx,
                     &events,

@@ -80,9 +80,7 @@ fn exit_code(status: RunStatus) -> ExitCode {
         RunStatus::Succeeded => ExitCode::SUCCESS,
         RunStatus::MaxIterations => ExitCode::from(2),
         RunStatus::Cancelled => ExitCode::from(130),
-        RunStatus::Failed | RunStatus::Partial | RunStatus::TimedOut | RunStatus::Running => {
-            ExitCode::from(1)
-        }
+        RunStatus::Failed | RunStatus::Running => ExitCode::from(1),
     }
 }
 

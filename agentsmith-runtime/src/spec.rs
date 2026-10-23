@@ -21,7 +21,6 @@ pub struct AgentSpec {
     pub mode: LoopMode,
     pub system_prompt: String,
     pub tools: Option<Vec<String>>,
-    pub subagent_tools: Option<Vec<String>>,
     /// `None` when the file omitted `model` or set it empty. The caller then
     /// uses `llm.model`.
     pub model: Option<String>,
@@ -38,7 +37,6 @@ impl AgentSpec {
             system_prompt: "Use the tools you need, then call finish with the final answer."
                 .to_string(),
             tools: None,
-            subagent_tools: None,
             model: None,
         }
     }
@@ -72,8 +70,6 @@ struct SpecFile {
     #[serde(default)]
     tools: Option<Vec<String>>,
     #[serde(default)]
-    subagent_tools: Option<Vec<String>>,
-    #[serde(default)]
     model: String,
 }
 
@@ -93,7 +89,6 @@ pub fn parse(text: &str) -> Result<AgentSpec, toml::de::Error> {
         mode: file.mode,
         system_prompt: file.system_prompt,
         tools: file.tools,
-        subagent_tools: file.subagent_tools,
         model: if model.is_empty() {
             None
         } else {
@@ -113,7 +108,6 @@ description = "Implements a task inside the working directory."
 mode = "react"
 system_prompt = "You are a careful software engineer. Stay inside the working directory."
 tools = ["read_file", "list_dir", "write_file", "shell"]
-subagent_tools = ["read_file", "list_dir"]
 model = ""
 "#;
 
@@ -133,10 +127,6 @@ model = ""
                 "shell".into()
             ])
         );
-        assert_eq!(
-            spec.subagent_tools,
-            Some(vec!["read_file".into(), "list_dir".into()])
-        );
     }
 
     #[test]
@@ -144,6 +134,10 @@ model = ""
         let mut text = SAMPLE.to_string();
         text.push_str("role = \"x\"\n");
         assert!(parse(&text).is_err());
+        assert!(parse(
+            "id = \"a\"\nname = \"A\"\nmode = \"react\"\nsystem_prompt = \"x\"\nsubagent_tools = [\"read_file\"]\n"
+        )
+        .is_err());
         let plan = parse("id = \"p\"\nname = \"P\"\nmode = \"plan\"\nsystem_prompt = \"x\"\n");
         assert_eq!(plan.unwrap().mode, LoopMode::Plan);
     }

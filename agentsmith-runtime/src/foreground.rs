@@ -6,9 +6,9 @@ use agentsmith_core::config::{Config, ToolsConfig};
 use agentsmith_core::Error;
 use agentsmith_tools::{register_builtins, BuiltinLimits, ToolRegistry};
 
-use crate::loop_::{AgentLoop, LoopLimits, RunContext, RunOutcome};
+use crate::loop_::{LoopLimits, RunContext, RunOutcome};
 use crate::react::ReactLoop;
-use crate::run_tools::{RunKind, RunTools};
+use crate::run_tools::RunTools;
 use crate::spec::AgentSpec;
 use crate::supervisor::Supervisor;
 use crate::transcript::Transcript;
@@ -25,7 +25,6 @@ pub struct ForegroundParams {
     pub cancel: CancellationToken,
 }
 
-/// One root ReAct run. Does not bind a port and does not POST a report.
 pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Error> {
     let registry = ToolRegistry::new();
     register_foreground_builtins(&registry, &params.config.tools)?;
@@ -33,22 +32,18 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
         registry,
         params.config.tools.allow.as_deref(),
         params.spec.tools.as_deref(),
-        RunKind::Root,
     )?;
+    let max_output_tokens = u32::try_from(params.config.llm.max_output_tokens)
+        .map_err(|_| Error::Config("llm.max_output_tokens does not fit in u32".into()))?;
+    let limits = LoopLimits::from_config(&params.config.loop_)?;
     let run_id = agentsmith_core::id::new_id();
     let data_dir = params.config.harness.data_dir.clone();
     let transcript = Transcript::with_log(&data_dir, run_id).map_err(|err| match err {
         Error::Io(err) => Error::Config(format!("data_dir: {err}")),
         other => other,
     })?;
-    let max_output_tokens = u32::try_from(params.config.llm.max_output_tokens)
-        .map_err(|_| Error::Config("llm.max_output_tokens does not fit in u32".into()))?;
     let ctx = RunContext {
         run_id,
-        root_run_id: run_id,
-        parent_run_id: None,
-        depth: 0,
-        name: params.spec.name.clone(),
         task: params.task,
         extra_context: None,
         model: params.model,
@@ -58,7 +53,7 @@ pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Erro
         workdir: params.workdir,
         llm: params.llm,
         tools,
-        limits: LoopLimits::from_config(&params.config.loop_)?,
+        limits,
         cancel: params.cancel,
         events: Arc::new(Supervisor::new()),
         transcript,

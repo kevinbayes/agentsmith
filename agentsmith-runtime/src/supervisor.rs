@@ -67,8 +67,6 @@ impl RunEvents for Supervisor {
             .iteration = n;
     }
 
-    async fn tool_used(&self, _run: RunId, _name: &str) {}
-
     async fn finished(&self, run: RunId, status: RunStatus, error_kind: Option<String>) {
         let mut runs = lock(&self.runs);
         let state = runs.entry(run).or_insert_with(RunState::running);

@@ -46,9 +46,8 @@ impl JsonlWriter {
             "error_kind": error_kind,
         }))?;
         if let Some(dir) = self.path.parent() {
-            // One finisher. Active files sit outside the cap of 20 terminal files.
-            // Revisit if concurrent service runs share this directory.
-            rotate_terminal_jsonl(dir, TERMINAL_JSONL_KEEP)?;
+            // One finisher. A rotation failure must not discard the finished run.
+            let _ = rotate_terminal_jsonl(dir, TERMINAL_JSONL_KEEP);
         }
         Ok(())
     }
@@ -140,8 +139,6 @@ fn is_terminal(path: &Path) -> bool {
 }
 
 /// Last non-empty line. Reads the tail so a long transcript is not loaded.
-/// The runs directory stays small: terminal files are capped and active files
-/// are bounded by the config slot ceiling (≤ 64).
 fn last_line(path: &Path) -> Option<String> {
     let mut file = File::open(path).ok()?;
     let len = file.metadata().ok()?.len();

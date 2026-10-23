@@ -2,14 +2,13 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
 
-use agentsmith_core::config::{Config, FailurePolicy};
+use agentsmith_core::config::Config;
 use agentsmith_core::{Error, LlmErrorKind, ToolErrorKind};
 use agentsmith_llm::{Completion, CompletionRequest, Llm, Message, StopReason, ToolCall};
 use agentsmith_runtime::{
-    run_foreground, AgentLoop, AgentSpec, CancellationToken, ForegroundParams, LoopLimits, Phase,
-    ReactLoop, RunContext, RunKind, RunOutcome, RunStatus, RunTools, Supervisor, Transcript,
+    run_foreground, AgentSpec, CancellationToken, ForegroundParams, LoopLimits, Phase, ReactLoop,
+    RunContext, RunOutcome, RunStatus, RunTools, Supervisor, Transcript,
 };
 use agentsmith_tools::{Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
 use serde_json::{json, Value};
@@ -128,14 +127,7 @@ impl Tool for ScriptedTool {
 fn limits(max_iters: u32, max_errors: u32) -> LoopLimits {
     LoopLimits {
         react_max_iterations: max_iters,
-        step_max_iterations: 8,
-        planner_attempts: 2,
         max_consecutive_tool_errors: max_errors,
-        max_subagent_depth: 2,
-        max_fanout: 8,
-        max_live_subagents: 16,
-        spawn_timeout: Duration::from_secs(30),
-        failure_policy: FailurePolicy::Continue,
     }
 }
 
@@ -194,10 +186,6 @@ fn harness(
     }
     let ctx = RunContext {
         run_id,
-        root_run_id: run_id,
-        parent_run_id: None,
-        depth: 0,
-        name: "react".into(),
         spec: AgentSpec::react_default(),
         task: "ship the change".into(),
         extra_context: None,
@@ -207,7 +195,7 @@ fn harness(
         max_output_bytes: 32 * 1024,
         workdir: std::env::temp_dir(),
         llm: llm.clone(),
-        tools: RunTools::resolve(registry, None, visible.as_deref(), RunKind::Root).unwrap(),
+        tools: RunTools::resolve(registry, None, visible.as_deref()).unwrap(),
         limits: limits(max_iters, max_errors),
         cancel,
         events: supervisor.clone(),
@@ -515,6 +503,62 @@ async fn a_successful_tool_resets_the_consecutive_error_counter() {
 }
 
 #[tokio::test]
+async fn a_zero_error_cap_spares_success_and_stops_on_the_first_error() {
+    let (tool, calls) = ScriptedTool::new("echo", vec![Ok("ok".into())]);
+    let outcome = run(harness(
+        vec![
+            Step::Ok(assistant(
+                None,
+                vec![tool_call("c1", "echo", Some(json!({})))],
+                StopReason::ToolUse,
+            )),
+            Step::Ok(assistant(Some("done"), vec![], StopReason::EndTurn)),
+        ],
+        vec![tool],
+        None,
+        4,
+        0,
+        CancellationToken::new(),
+    ))
+    .await
+    .outcome;
+    assert_eq!(outcome.status, RunStatus::Succeeded);
+    assert_eq!(outcome.summary, "done");
+    assert!(outcome.error_kind.is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let (tool, calls) = ScriptedTool::new("echo", vec![Err(execution("echo", "disk full"))]);
+    let outcome = run(harness(
+        vec![Step::Ok(assistant(
+            None,
+            vec![tool_call("c1", "echo", Some(json!({})))],
+            StopReason::ToolUse,
+        ))],
+        vec![tool],
+        None,
+        4,
+        0,
+        CancellationToken::new(),
+    ))
+    .await
+    .outcome;
+    assert_eq!(outcome.status, RunStatus::Failed);
+    assert_eq!(outcome.error_kind.as_deref(), Some("tool_errors"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(tool_json(&outcome.transcript, "c1")["ok"], json!(false));
+}
+
+#[tokio::test]
+async fn a_fired_cancel_token_wins_over_a_zero_iteration_cap() {
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let done = run(harness(vec![], Vec::new(), None, 0, 5, cancel)).await;
+    assert_eq!(done.outcome.status, RunStatus::Cancelled);
+    assert!(done.outcome.error_kind.is_none());
+    assert!(done.llm.seen().is_empty());
+}
+
+#[tokio::test]
 async fn none_arguments_do_not_invoke_the_tool() {
     let (tool, calls) = ScriptedTool::new("echo", vec![Ok("nope".into())]);
     let harness = harness(
@@ -800,6 +844,31 @@ async fn foreground_rejects_an_unavailable_spec_tool_before_writing_jsonl() {
     };
     assert!(matches!(err, Error::Config(_)), "{err}");
     assert!(err.to_string().contains("nope"), "{err}");
+    assert!(!data.join("runs").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn foreground_rejects_an_oversized_token_limit_before_writing_jsonl() {
+    let dir = scratch();
+    let data = dir.join("data");
+    let mut config = foreground_config(&data, &dir, Some(false));
+    config.llm.max_output_tokens = u64::from(u32::MAX) + 1;
+    let err = match run_foreground(ForegroundParams {
+        task: "do the thing".into(),
+        spec: AgentSpec::react_default(),
+        config,
+        model: "test-model".into(),
+        workdir: dir.clone(),
+        llm: FakeLlm::new(vec![]),
+        cancel: CancellationToken::new(),
+    })
+    .await
+    {
+        Err(err) => err,
+        Ok(_) => panic!("expected an oversized token limit to fail the run"),
+    };
+    assert!(err.to_string().contains("max_output_tokens"), "{err}");
     assert!(!data.join("runs").exists());
     let _ = std::fs::remove_dir_all(dir);
 }

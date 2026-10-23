@@ -4,12 +4,6 @@ use std::sync::Arc;
 use agentsmith_core::{Error, ToolErrorKind};
 use agentsmith_tools::{Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
 
-/// Who is asking. This build only constructs [`RunKind::Root`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunKind {
-    Root,
-}
-
 /// Per-run view. `get` and `call` both refuse a name outside `visible`.
 #[derive(Clone)]
 pub struct RunTools {
@@ -19,21 +13,18 @@ pub struct RunTools {
 
 impl RunTools {
     /// Allow-list steps: registered names, optional `tools.allow`, optional
-    /// non-empty `spec.tools`, then kind `Root` drops `spawn_subagents`.
+    /// non-empty `spec.tools`, then drop `spawn_subagents`.
     ///
     /// An empty `spec.tools` does not cut. An empty `tools.allow` does.
     pub fn resolve(
         registry: ToolRegistry,
         allow: Option<&[String]>,
         spec_tools: Option<&[String]>,
-        kind: RunKind,
     ) -> Result<Self, Error> {
         let registered: BTreeSet<String> = registry.names().into_iter().collect();
         let mut visible = apply_allow(&registered, allow)?;
         apply_spec(&mut visible, spec_tools)?;
-        if kind == RunKind::Root {
-            visible.remove("spawn_subagents");
-        }
+        visible.remove("spawn_subagents");
         Ok(Self { registry, visible })
     }
 
@@ -165,13 +156,8 @@ mod tests {
     #[test]
     fn get_hides_a_registered_tool_and_definitions_are_ordered() {
         let (registry, _) = registry(&["zebra", "hidden", "alpha"]);
-        let tools = RunTools::resolve(
-            registry,
-            None,
-            Some(&["zebra".into(), "alpha".into()]),
-            RunKind::Root,
-        )
-        .unwrap();
+        let tools =
+            RunTools::resolve(registry, None, Some(&["zebra".into(), "alpha".into()])).unwrap();
         assert!(tools.get("hidden").is_none());
         assert!(tools.get("alpha").is_some());
         assert!(tools.get("zebra").is_some());
@@ -190,7 +176,6 @@ mod tests {
             registry.clone(),
             Some(&["alpha".into(), "missing".into()]),
             None,
-            RunKind::Root,
         ));
         assert!(err.to_string().contains("missing"), "{err}");
 
@@ -198,21 +183,20 @@ mod tests {
             registry.clone(),
             Some(&["alpha".into()]),
             Some(&["zebra".into()]),
-            RunKind::Root,
         ));
         assert!(err.to_string().contains("zebra"), "{err}");
 
-        let tools = RunTools::resolve(registry.clone(), Some(&[]), None, RunKind::Root).unwrap();
+        let tools = RunTools::resolve(registry.clone(), Some(&[]), None).unwrap();
         assert!(tools.definitions().is_empty());
 
-        let tools = RunTools::resolve(registry, None, Some(&[]), RunKind::Root).unwrap();
+        let tools = RunTools::resolve(registry, None, Some(&[])).unwrap();
         assert_eq!(tools.definitions().len(), 2);
     }
 
     #[test]
     fn root_drops_spawn_subagents_after_the_intersection() {
         let (registry, calls) = registry(&["read_file", "spawn_subagents"]);
-        let tools = RunTools::resolve(registry, None, None, RunKind::Root).unwrap();
+        let tools = RunTools::resolve(registry, None, None).unwrap();
         assert!(tools.get("spawn_subagents").is_none());
         assert!(tools.get("read_file").is_some());
         assert_eq!(calls[1].load(Ordering::SeqCst), 0);
@@ -221,8 +205,7 @@ mod tests {
     #[tokio::test]
     async fn call_refuses_a_name_that_is_registered_but_hidden() {
         let (registry, calls) = registry(&["alpha", "hidden"]);
-        let tools =
-            RunTools::resolve(registry, None, Some(&["alpha".into()]), RunKind::Root).unwrap();
+        let tools = RunTools::resolve(registry, None, Some(&["alpha".into()])).unwrap();
         let err = tools
             .call(
                 "hidden",

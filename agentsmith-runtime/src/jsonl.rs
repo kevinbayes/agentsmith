@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use agentsmith_core::Error;
 
-use crate::loop_::{RunId, RunStatus};
+use crate::loop_::{Phase, RunId, RunStatus};
 
 /// Terminal JSONL files kept after a run finishes. Active files are not in this cap.
 const TERMINAL_JSONL_KEEP: usize = 20;
@@ -36,12 +36,13 @@ impl JsonlWriter {
         status: RunStatus,
         error_kind: Option<&str>,
         iteration: u32,
+        phase: Phase,
     ) -> Result<(), Error> {
         self.write_value(&json!({
             "event": "finished",
             "run_id": self.run_id.to_string(),
             "status": status,
-            "phase": "react",
+            "phase": phase,
             "iteration": iteration,
             "error_kind": error_kind,
         }))?;

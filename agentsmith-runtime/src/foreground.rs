@@ -6,10 +6,12 @@ use agentsmith_core::config::{Config, ToolsConfig};
 use agentsmith_core::Error;
 use agentsmith_tools::{register_builtins, BuiltinLimits, ToolRegistry};
 
-use crate::loop_::{LoopLimits, RunContext, RunOutcome};
+use crate::loop_::{LoopLimits, RunContext, RunEvents, RunOutcome};
+use crate::plan::PlanExecuteLoop;
 use crate::react::ReactLoop;
-use crate::run_tools::RunTools;
-use crate::spec::AgentSpec;
+use crate::run_tools::{RunKind, RunTools, ToolFilter};
+use crate::spawn::{SpawnerConfig, SubagentSpawner};
+use crate::spec::{AgentSpec, LoopMode};
 use crate::supervisor::Supervisor;
 use crate::transcript::Transcript;
 use crate::CancellationToken;
@@ -23,43 +25,86 @@ pub struct ForegroundParams {
     pub workdir: PathBuf,
     pub llm: Arc<dyn agentsmith_llm::Llm>,
     pub cancel: CancellationToken,
+    /// Explicit mode already won over the spec, when the caller passed one.
+    pub mode: LoopMode,
 }
 
 pub async fn run_foreground(params: ForegroundParams) -> Result<RunOutcome, Error> {
     let registry = ToolRegistry::new();
     register_foreground_builtins(&registry, &params.config.tools)?;
-    let tools = RunTools::resolve(
-        registry,
-        params.config.tools.allow.as_deref(),
-        params.spec.tools.as_deref(),
-    )?;
     let max_output_tokens = u32::try_from(params.config.llm.max_output_tokens)
         .map_err(|_| Error::Config("llm.max_output_tokens does not fit in u32".into()))?;
     let limits = LoopLimits::from_config(&params.config.loop_)?;
-    let run_id = agentsmith_core::id::new_id();
+    let events: Arc<dyn RunEvents> = Arc::new(Supervisor::new());
     let data_dir = params.config.harness.data_dir.clone();
+    let allow = params.config.tools.allow.clone();
+    // Install before the root view is resolved so the intersection can drop it.
+    let spawner = SubagentSpawner::new(SpawnerConfig {
+        registry: registry.clone(),
+        llm: Arc::clone(&params.llm),
+        model: params.model.clone(),
+        max_output_tokens,
+        temperature: params.config.llm.temperature,
+        max_output_bytes: params.config.tools.max_output_bytes,
+        workdir: params.workdir.clone(),
+        data_dir: data_dir.clone(),
+        spec: params.spec.clone(),
+        allow: allow.clone(),
+        limits: limits.clone(),
+        events: Arc::clone(&events),
+    });
+    spawner.install()?;
+    if params.spec.subagent_tools.is_some() {
+        // A name outside the parent view fails the run before any step starts.
+        RunTools::resolve_for(
+            registry.clone(),
+            ToolFilter {
+                allow: allow.as_deref(),
+                spec_tools: params.spec.tools.as_deref(),
+                subagent_tools: params.spec.subagent_tools.as_deref(),
+                kind: RunKind::Spawned,
+                depth: 1,
+                max_subagent_depth: limits.max_subagent_depth,
+            },
+        )?;
+    }
+    let tools = RunTools::resolve(registry, allow.as_deref(), params.spec.tools.as_deref())?;
+    let run_id = agentsmith_core::id::new_id();
     let transcript = Transcript::with_log(&data_dir, run_id).map_err(|err| match err {
         Error::Io(err) => Error::Config(format!("data_dir: {err}")),
         other => other,
     })?;
+    let max_iterations = match params.mode {
+        LoopMode::React => limits.react_max_iterations,
+        LoopMode::Plan => limits.step_max_iterations,
+    };
+    let name = params.spec.name.clone();
     let ctx = RunContext {
         run_id,
+        parent_run_id: None,
+        depth: 0,
+        name,
         task: params.task,
         extra_context: None,
         model: params.model,
         max_output_tokens,
         temperature: params.config.llm.temperature,
         max_output_bytes: params.config.tools.max_output_bytes,
+        max_iterations,
         workdir: params.workdir,
         llm: params.llm,
         tools,
         limits,
         cancel: params.cancel,
-        events: Arc::new(Supervisor::new()),
+        events,
         transcript,
         spec: params.spec,
+        spawner: Some(spawner),
     };
-    ReactLoop.run(ctx).await
+    match params.mode {
+        LoopMode::React => ReactLoop.run(ctx).await,
+        LoopMode::Plan => PlanExecuteLoop.run(ctx).await,
+    }
 }
 
 /// `tools.shell.enabled == None` enables shell for this foreground run.

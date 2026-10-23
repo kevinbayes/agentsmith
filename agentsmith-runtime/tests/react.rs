@@ -2,13 +2,14 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
-use agentsmith_core::config::Config;
+use agentsmith_core::config::{Config, FailurePolicy};
 use agentsmith_core::{Error, LlmErrorKind, ToolErrorKind};
 use agentsmith_llm::{Completion, CompletionRequest, Llm, Message, StopReason, ToolCall};
 use agentsmith_runtime::{
-    run_foreground, AgentSpec, CancellationToken, ForegroundParams, LoopLimits, Phase, ReactLoop,
-    RunContext, RunOutcome, RunStatus, RunTools, Supervisor, Transcript,
+    run_foreground, AgentSpec, CancellationToken, ForegroundParams, LoopLimits, LoopMode, Phase,
+    ReactLoop, RunContext, RunOutcome, RunStatus, RunTools, Supervisor, Transcript,
 };
 use agentsmith_tools::{Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
 use serde_json::{json, Value};
@@ -127,7 +128,14 @@ impl Tool for ScriptedTool {
 fn limits(max_iters: u32, max_errors: u32) -> LoopLimits {
     LoopLimits {
         react_max_iterations: max_iters,
+        step_max_iterations: max_iters,
+        planner_attempts: 2,
         max_consecutive_tool_errors: max_errors,
+        max_subagent_depth: 2,
+        max_fanout: 8,
+        max_live_subagents: 8,
+        spawn_timeout: Duration::from_secs(120),
+        failure_policy: FailurePolicy::Continue,
     }
 }
 
@@ -186,6 +194,9 @@ fn harness(
     }
     let ctx = RunContext {
         run_id,
+        parent_run_id: None,
+        depth: 0,
+        name: "react".into(),
         spec: AgentSpec::react_default(),
         task: "ship the change".into(),
         extra_context: None,
@@ -193,6 +204,7 @@ fn harness(
         max_output_tokens: 64,
         temperature: None,
         max_output_bytes: 32 * 1024,
+        max_iterations: max_iters,
         workdir: std::env::temp_dir(),
         llm: llm.clone(),
         tools: RunTools::resolve(registry, None, visible.as_deref()).unwrap(),
@@ -200,6 +212,7 @@ fn harness(
         cancel,
         events: supervisor.clone(),
         transcript: Transcript::empty(),
+        spawner: None,
     };
     Harness {
         llm,
@@ -769,6 +782,7 @@ async fn foreground_run_writes_jsonl_and_shell_follows_the_unset_flag() {
         workdir: work.clone(),
         llm: llm.clone(),
         cancel: CancellationToken::new(),
+        mode: LoopMode::React,
     })
     .await
     .unwrap();
@@ -809,6 +823,7 @@ async fn foreground_run_writes_jsonl_and_shell_follows_the_unset_flag() {
         workdir: work,
         llm: llm_off.clone(),
         cancel: CancellationToken::new(),
+        mode: LoopMode::React,
     })
     .await
     .unwrap();
@@ -836,6 +851,7 @@ async fn foreground_rejects_an_unavailable_spec_tool_before_writing_jsonl() {
         workdir: work,
         llm: FakeLlm::new(vec![]),
         cancel: CancellationToken::new(),
+        mode: LoopMode::React,
     })
     .await
     {
@@ -862,6 +878,7 @@ async fn foreground_rejects_an_oversized_token_limit_before_writing_jsonl() {
         workdir: dir.clone(),
         llm: FakeLlm::new(vec![]),
         cancel: CancellationToken::new(),
+        mode: LoopMode::React,
     })
     .await
     {

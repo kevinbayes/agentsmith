@@ -23,9 +23,6 @@ pub fn execute(
     };
     // The synthetic spec is not a mode. Omitting both flags stays an error.
     let resolved = agentsmith_runtime::resolve_mode(mode, loaded.as_ref())?;
-    if resolved != LoopMode::React {
-        return Err(Error::Config("plan mode is not in this build".into()));
-    }
     let spec = loaded.unwrap_or_else(agentsmith_runtime::AgentSpec::react_default);
     let model = resolve_model(&spec, &config.llm.model)?;
     if config.llm.api_key.is_empty() {
@@ -52,6 +49,7 @@ pub fn execute(
             workdir,
             llm: Arc::new(llm),
             cancel: cancel.clone(),
+            mode: resolved,
         }),
         cancel,
     )?;
@@ -78,9 +76,10 @@ fn resolve_model(
 fn exit_code(status: RunStatus) -> ExitCode {
     match status {
         RunStatus::Succeeded => ExitCode::SUCCESS,
-        RunStatus::MaxIterations => ExitCode::from(2),
+        RunStatus::Partial | RunStatus::MaxIterations => ExitCode::from(2),
         RunStatus::Cancelled => ExitCode::from(130),
-        RunStatus::Failed | RunStatus::Running => ExitCode::from(1),
+        // A root run has no deadline. `timed_out` is only a join target.
+        RunStatus::Failed | RunStatus::TimedOut | RunStatus::Running => ExitCode::from(1),
     }
 }
 
@@ -141,5 +140,14 @@ mod tests {
             ..agentsmith_runtime::AgentSpec::react_default()
         };
         assert_eq!(resolve_model(&spec, "gpt").unwrap(), "spec-model");
+    }
+
+    #[test]
+    fn partial_exits_2_and_timed_out_exits_1() {
+        assert_eq!(exit_code(RunStatus::Partial), ExitCode::from(2));
+        assert_eq!(exit_code(RunStatus::MaxIterations), ExitCode::from(2));
+        assert_eq!(exit_code(RunStatus::TimedOut), ExitCode::from(1));
+        assert_eq!(exit_code(RunStatus::Failed), ExitCode::from(1));
+        assert_eq!(exit_code(RunStatus::Cancelled), ExitCode::from(130));
     }
 }

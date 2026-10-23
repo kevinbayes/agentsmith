@@ -4,7 +4,7 @@ use agentsmith_core::Error;
 use agentsmith_llm::Message;
 
 use crate::jsonl::JsonlWriter;
-use crate::loop_::{RunId, RunStatus};
+use crate::loop_::{Phase, RunId, RunStatus};
 
 /// In-memory conversation plus an optional append-only JSONL log.
 #[derive(Default)]
@@ -42,9 +42,10 @@ impl Transcript {
         status: RunStatus,
         error_kind: Option<&str>,
         iteration: u32,
+        phase: Phase,
     ) -> Result<(), Error> {
         if let Some(log) = &mut self.log {
-            log.finish(status, error_kind, iteration)?;
+            log.finish(status, error_kind, iteration, phase)?;
         }
         Ok(())
     }

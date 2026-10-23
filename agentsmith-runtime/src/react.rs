@@ -6,7 +6,8 @@ use agentsmith_llm::{
 };
 use agentsmith_tools::ToolCtx;
 
-use crate::loop_::{RunContext, RunEvents, RunOutcome, RunStatus};
+use crate::loop_::{Phase, RunContext, RunEvents, RunMeta, RunOutcome, RunStatus};
+use crate::run_tools::SPAWN_SUBAGENTS;
 
 #[derive(Debug, Default)]
 pub struct ReactLoop;
@@ -22,8 +23,25 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
     let llm = Arc::clone(&ctx.llm);
     let cancel = ctx.cancel.clone();
 
-    events.phase(ctx.run_id, crate::loop_::Phase::React).await;
+    events
+        .started(
+            ctx.run_id,
+            RunMeta {
+                parent_run_id: ctx.parent_run_id,
+                depth: ctx.depth,
+                name: ctx.name.clone(),
+                max_iterations: ctx.max_iterations,
+                phase: Phase::React,
+            },
+        )
+        .await;
+    events.phase(ctx.run_id, Phase::React).await;
     events.iteration(ctx.run_id, 0).await;
+    // Held until this run returns so spawn_subagents can read depth and the prompt.
+    let _caller = ctx
+        .spawner
+        .clone()
+        .map(|spawner| spawner.enter(ctx.run_id, ctx.depth, ctx.spec.system_prompt.clone()));
 
     ctx.transcript.push(Message::System {
         content: ctx.spec.system_prompt.clone(),
@@ -32,7 +50,7 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
         content: user_text(&ctx.task, ctx.extra_context.as_deref()),
     })?;
 
-    let max_iters = ctx.limits.react_max_iterations;
+    let max_iters = ctx.max_iterations;
     let max_errors = ctx.limits.max_consecutive_tool_errors;
     let mut iteration = 0u32;
     let mut consecutive_errors = 0u32;
@@ -213,12 +231,27 @@ async fn react(mut ctx: RunContext) -> Result<RunOutcome, Error> {
                     )
                 }
                 Some(arguments) => {
+                    events.tool_used(ctx.run_id, &name).await;
                     let tool_ctx = ToolCtx {
                         run_id: ctx.run_id,
                         workdir: ctx.workdir.clone(),
                         cancel: cancel.clone(),
                     };
                     match ctx.tools.call(&name, tool_ctx, arguments).await {
+                        Ok(output) if name == SPAWN_SUBAGENTS => {
+                            // The tool already returned the join object. Do not wrap it.
+                            // `ok: false` counts toward the consecutive-error cap.
+                            let ok = serde_json::from_str::<serde_json::Value>(&output.content)
+                                .ok()
+                                .and_then(|value| value.get("ok").and_then(|flag| flag.as_bool()))
+                                .unwrap_or(false);
+                            if ok {
+                                consecutive_errors = 0;
+                            } else {
+                                consecutive_errors = consecutive_errors.saturating_add(1);
+                            }
+                            (output.content, None, !ok)
+                        }
                         Ok(output) => {
                             consecutive_errors = 0;
                             let (observation, capped) =
@@ -344,7 +377,8 @@ async fn stop(
     error_kind: Option<&str>,
     iteration: u32,
 ) -> Result<RunOutcome, Error> {
-    ctx.transcript.finish(status, error_kind, iteration)?;
+    ctx.transcript
+        .finish(status, error_kind, iteration, Phase::React)?;
     let error_kind = error_kind.map(str::to_string);
     events
         .finished(ctx.run_id, status, error_kind.clone())

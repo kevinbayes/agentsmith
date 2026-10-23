@@ -51,6 +51,8 @@ enum ConfigAction {
 enum ModeArg {
     /// ReAct tool loop.
     React,
+    /// Plan, then execute each step.
+    Plan,
 }
 
 fn main() -> ExitCode {
@@ -73,6 +75,7 @@ fn main() -> ExitCode {
         } => {
             let mode = mode.map(|value| match value {
                 ModeArg::React => agentsmith_runtime::LoopMode::React,
+                ModeArg::Plan => agentsmith_runtime::LoopMode::Plan,
             });
             match commands::run::execute(
                 cli.config.as_deref(),

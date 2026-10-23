@@ -1,29 +1,66 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
-use crate::loop_::{Phase, RunEvents, RunId, RunStatus};
+use crate::loop_::{Phase, RunEvents, RunId, RunMeta, RunStatus};
 use crate::snapshot::RunSnapshot;
 
 #[derive(Debug)]
 struct RunState {
+    parent_run_id: Option<RunId>,
+    depth: u32,
+    name: String,
     status: RunStatus,
     phase: Phase,
     iteration: u32,
+    max_iterations: u32,
     error_kind: Option<String>,
+    tool_use: BTreeMap<String, u64>,
 }
 
 impl RunState {
     fn running() -> Self {
         Self {
+            parent_run_id: None,
+            depth: 0,
+            name: String::new(),
             status: RunStatus::Running,
             phase: Phase::React,
             iteration: 0,
+            max_iterations: 0,
             error_kind: None,
+            tool_use: BTreeMap::new(),
+        }
+    }
+
+    fn apply_meta(&mut self, meta: RunMeta) {
+        self.parent_run_id = meta.parent_run_id;
+        self.depth = meta.depth;
+        self.name = meta.name;
+        self.max_iterations = meta.max_iterations;
+        self.phase = meta.phase;
+    }
+
+    fn snapshot(&self, run_id: RunId) -> RunSnapshot {
+        RunSnapshot {
+            run_id,
+            parent_run_id: self.parent_run_id,
+            depth: self.depth,
+            name: self.name.clone(),
+            status: self.status,
+            phase: self.phase,
+            iteration: self.iteration,
+            max_iterations: self.max_iterations,
+            error_kind: self.error_kind.clone(),
+            tool_use: self.tool_use.clone(),
         }
     }
 }
 
 /// In-memory runs. The transcript stays on the loop, not here.
+///
+/// The first terminal status sticks. A detached child can still finish after
+/// its join has already recorded `timed_out`, and that late exit must not
+/// overwrite it.
 #[derive(Debug, Default)]
 pub struct Supervisor {
     runs: Mutex<BTreeMap<RunId, RunState>>,
@@ -37,13 +74,14 @@ impl Supervisor {
     pub fn snapshot(&self, run_id: RunId) -> Option<RunSnapshot> {
         let runs = lock(&self.runs);
         let state = runs.get(&run_id)?;
-        Some(RunSnapshot {
-            run_id,
-            status: state.status,
-            phase: state.phase,
-            iteration: state.iteration,
-            error_kind: state.error_kind.clone(),
-        })
+        Some(state.snapshot(run_id))
+    }
+
+    pub fn snapshots(&self) -> Vec<RunSnapshot> {
+        let runs = lock(&self.runs);
+        runs.iter()
+            .map(|(run_id, state)| state.snapshot(*run_id))
+            .collect()
     }
 }
 
@@ -53,23 +91,48 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[async_trait::async_trait]
 impl RunEvents for Supervisor {
+    async fn started(&self, run: RunId, meta: RunMeta) {
+        let mut runs = lock(&self.runs);
+        let state = runs.entry(run).or_insert_with(RunState::running);
+        if state.status.is_terminal() {
+            return;
+        }
+        state.apply_meta(meta);
+    }
+
     async fn phase(&self, run: RunId, phase: Phase) {
-        lock(&self.runs)
-            .entry(run)
-            .or_insert_with(RunState::running)
-            .phase = phase;
+        let mut runs = lock(&self.runs);
+        let state = runs.entry(run).or_insert_with(RunState::running);
+        if state.status.is_terminal() {
+            return;
+        }
+        state.phase = phase;
     }
 
     async fn iteration(&self, run: RunId, n: u32) {
-        lock(&self.runs)
-            .entry(run)
-            .or_insert_with(RunState::running)
-            .iteration = n;
+        let mut runs = lock(&self.runs);
+        let state = runs.entry(run).or_insert_with(RunState::running);
+        if state.status.is_terminal() {
+            return;
+        }
+        state.iteration = n;
+    }
+
+    async fn tool_used(&self, run: RunId, name: &str) {
+        let mut runs = lock(&self.runs);
+        let state = runs.entry(run).or_insert_with(RunState::running);
+        if state.status.is_terminal() {
+            return;
+        }
+        *state.tool_use.entry(name.to_string()).or_insert(0) += 1;
     }
 
     async fn finished(&self, run: RunId, status: RunStatus, error_kind: Option<String>) {
         let mut runs = lock(&self.runs);
         let state = runs.entry(run).or_insert_with(RunState::running);
+        if state.status.is_terminal() {
+            return;
+        }
         state.status = status;
         state.error_kind = error_kind;
     }
@@ -98,5 +161,34 @@ mod tests {
         assert_eq!(later.error_kind.as_deref(), Some("length"));
         assert_eq!(later.iteration, 3);
         assert!(supervisor.snapshot(agentsmith_core::id::new_id()).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_late_finish_does_not_overwrite_timed_out() {
+        let supervisor = Supervisor::new();
+        let id = agentsmith_core::id::new_id();
+        supervisor
+            .started(
+                id,
+                RunMeta {
+                    parent_run_id: None,
+                    depth: 1,
+                    name: "reader".into(),
+                    max_iterations: 8,
+                    phase: Phase::React,
+                },
+            )
+            .await;
+        supervisor
+            .finished(id, RunStatus::TimedOut, Some("timeout".into()))
+            .await;
+        supervisor.finished(id, RunStatus::Cancelled, None).await;
+        supervisor.iteration(id, 4).await;
+        let snap = supervisor.snapshot(id).unwrap();
+        assert_eq!(snap.status, RunStatus::TimedOut);
+        assert_eq!(snap.error_kind.as_deref(), Some("timeout"));
+        assert_eq!(snap.depth, 1);
+        assert_eq!(snap.iteration, 0);
+        assert_eq!(snap.max_iterations, 8);
     }
 }

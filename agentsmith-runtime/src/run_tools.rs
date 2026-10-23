@@ -4,6 +4,26 @@ use std::sync::Arc;
 use agentsmith_core::{Error, ToolErrorKind};
 use agentsmith_tools::{Tool, ToolCtx, ToolDefinition, ToolOutput, ToolRegistry};
 
+pub const SPAWN_SUBAGENTS: &str = "spawn_subagents";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunKind {
+    Root,
+    Step,
+    Spawned,
+}
+
+/// Inputs for the four allow-list steps.
+pub struct ToolFilter<'a> {
+    pub allow: Option<&'a [String]>,
+    pub spec_tools: Option<&'a [String]>,
+    /// Applied only for [`RunKind::Spawned`]. `None` inherits the parent view.
+    pub subagent_tools: Option<&'a [String]>,
+    pub kind: RunKind,
+    pub depth: u32,
+    pub max_subagent_depth: u32,
+}
+
 /// Per-run view. `get` and `call` both refuse a name outside `visible`.
 #[derive(Clone)]
 pub struct RunTools {
@@ -12,8 +32,8 @@ pub struct RunTools {
 }
 
 impl RunTools {
-    /// Allow-list steps: registered names, optional `tools.allow`, optional
-    /// non-empty `spec.tools`, then drop `spawn_subagents`.
+    /// Root view: registered names, optional `tools.allow`, optional non-empty
+    /// `spec.tools`, then drop `spawn_subagents`.
     ///
     /// An empty `spec.tools` does not cut. An empty `tools.allow` does.
     pub fn resolve(
@@ -21,10 +41,55 @@ impl RunTools {
         allow: Option<&[String]>,
         spec_tools: Option<&[String]>,
     ) -> Result<Self, Error> {
+        Self::resolve_for(
+            registry,
+            ToolFilter {
+                allow,
+                spec_tools,
+                subagent_tools: None,
+                kind: RunKind::Root,
+                depth: 0,
+                max_subagent_depth: 0,
+            },
+        )
+    }
+
+    /// Allow-list steps, then the kind rule.
+    ///
+    /// `Root` drops `spawn_subagents`. `Step` keeps it only while
+    /// `depth < max_subagent_depth` and the intersection left it in. `Spawned`
+    /// intersects `subagent_tools` when that list is set (a name outside the
+    /// parent view is an error, not a grant) and drops `spawn_subagents` at
+    /// `depth >= max_subagent_depth`.
+    pub fn resolve_for(registry: ToolRegistry, filter: ToolFilter<'_>) -> Result<Self, Error> {
         let registered: BTreeSet<String> = registry.names().into_iter().collect();
-        let mut visible = apply_allow(&registered, allow)?;
-        apply_spec(&mut visible, spec_tools)?;
-        visible.remove("spawn_subagents");
+        let mut visible = apply_allow(&registered, filter.allow)?;
+        apply_spec(&mut visible, filter.spec_tools)?;
+        match filter.kind {
+            RunKind::Root => {
+                visible.remove(SPAWN_SUBAGENTS);
+            }
+            RunKind::Step => {
+                if filter.depth >= filter.max_subagent_depth {
+                    visible.remove(SPAWN_SUBAGENTS);
+                }
+            }
+            RunKind::Spawned => {
+                if let Some(names) = filter.subagent_tools {
+                    for name in names {
+                        if !visible.contains(name) {
+                            return Err(Error::Config(format!(
+                                "spec.subagent_tools includes \"{name}\", which is not available"
+                            )));
+                        }
+                    }
+                    visible.retain(|name| names.iter().any(|wanted| wanted == name));
+                }
+                if filter.depth >= filter.max_subagent_depth {
+                    visible.remove(SPAWN_SUBAGENTS);
+                }
+            }
+        }
         Ok(Self { registry, visible })
     }
 
@@ -200,6 +265,133 @@ mod tests {
         assert!(tools.get("spawn_subagents").is_none());
         assert!(tools.get("read_file").is_some());
         assert_eq!(calls[1].load(Ordering::SeqCst), 0);
+    }
+
+    fn names_of(tools: &RunTools) -> Vec<String> {
+        tools
+            .definitions()
+            .into_iter()
+            .map(|def| def.name)
+            .collect()
+    }
+
+    #[test]
+    fn step_keeps_spawn_only_under_max_depth_and_an_explicit_list_does_not_grant_it() {
+        let (registry, _) = registry(&["read_file", "shell", "spawn_subagents"]);
+        let step = RunTools::resolve_for(
+            registry.clone(),
+            ToolFilter {
+                allow: None,
+                spec_tools: None,
+                subagent_tools: None,
+                kind: RunKind::Step,
+                depth: 0,
+                max_subagent_depth: 2,
+            },
+        )
+        .unwrap();
+        assert!(step.get("spawn_subagents").is_some());
+
+        let at_max = RunTools::resolve_for(
+            registry.clone(),
+            ToolFilter {
+                allow: None,
+                spec_tools: None,
+                subagent_tools: None,
+                kind: RunKind::Step,
+                depth: 2,
+                max_subagent_depth: 2,
+            },
+        )
+        .unwrap();
+        assert!(at_max.get("spawn_subagents").is_none());
+        assert!(at_max.get("read_file").is_some());
+
+        let cut = RunTools::resolve_for(
+            registry,
+            ToolFilter {
+                allow: None,
+                spec_tools: Some(&["read_file".into()]),
+                subagent_tools: None,
+                kind: RunKind::Step,
+                depth: 0,
+                max_subagent_depth: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(names_of(&cut), ["read_file"]);
+    }
+
+    #[test]
+    fn subagent_tools_cannot_grant_and_omitted_inherits_until_max_depth() {
+        let (registry, _) = registry(&["read_file", "shell", "spawn_subagents"]);
+        let err = match RunTools::resolve_for(
+            registry.clone(),
+            ToolFilter {
+                allow: None,
+                spec_tools: Some(&["read_file".into(), "spawn_subagents".into()]),
+                subagent_tools: Some(&["shell".into()]),
+                kind: RunKind::Spawned,
+                depth: 1,
+                max_subagent_depth: 2,
+            },
+        ) {
+            Err(err) => err,
+            Ok(_) => panic!("expected subagent_tools to refuse a grant"),
+        };
+        assert!(
+            err.to_string().contains("subagent_tools") && err.to_string().contains("shell"),
+            "{err}"
+        );
+
+        let inherited = RunTools::resolve_for(
+            registry.clone(),
+            ToolFilter {
+                allow: None,
+                spec_tools: Some(&["read_file".into(), "spawn_subagents".into()]),
+                subagent_tools: None,
+                kind: RunKind::Spawned,
+                depth: 1,
+                max_subagent_depth: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(names_of(&inherited), ["read_file", "spawn_subagents"]);
+
+        let empty = RunTools::resolve_for(
+            registry.clone(),
+            ToolFilter {
+                allow: None,
+                spec_tools: Some(&["read_file".into(), "spawn_subagents".into()]),
+                subagent_tools: Some(&[]),
+                kind: RunKind::Spawned,
+                depth: 1,
+                max_subagent_depth: 2,
+            },
+        )
+        .unwrap();
+        assert!(
+            empty.definitions().is_empty(),
+            "an empty subagent_tools list cuts the view"
+        );
+
+        let at_max = RunTools::resolve_for(
+            registry,
+            ToolFilter {
+                allow: None,
+                spec_tools: Some(&["read_file".into(), "spawn_subagents".into()]),
+                subagent_tools: Some(&["read_file".into(), "spawn_subagents".into()]),
+                kind: RunKind::Spawned,
+                depth: 2,
+                max_subagent_depth: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            names_of(&at_max),
+            ["read_file"],
+            "spawn_subagents is absent at depth == max even if the list names it"
+        );
     }
 
     #[tokio::test]

@@ -129,7 +129,7 @@ fn run_spec_plan_mode_exits_2() {
     write_run_config(
         &dir,
         &format!(
-            "[llm]\nmodel = \"m\"\napi_key = \"k\"\nbase_url = \"http://127.0.0.1:9\"\ntimeout_secs = 1\nretries = 0\n\n[harness]\ndata_dir = \"{}\"\n",
+            "[llm]\napi_key = \"k\"\nbase_url = \"http://127.0.0.1:9\"\ntimeout_secs = 1\nretries = 0\n\n[harness]\ndata_dir = \"{}\"\n",
             dir.join("data").display()
         ),
     );
@@ -139,7 +139,17 @@ fn run_spec_plan_mode_exits_2() {
         "id = \"coder\"\nname = \"Coder\"\nmode = \"plan\"\nsystem_prompt = \"Plan it.\"\n",
     )
     .unwrap();
-    let out = run_output(&dir, &["--task", "hello", "--spec", spec.to_str().unwrap()]);
+    let out = run_output(
+        &dir,
+        &[
+            "--task",
+            "hello",
+            "--mode",
+            "plan",
+            "--spec",
+            spec.to_str().unwrap(),
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -147,10 +157,8 @@ fn run_spec_plan_mode_exits_2() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("plan mode is not in this build"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("llm.model"), "{stderr}");
+    assert!(!stderr.contains("not in this build"), "{stderr}");
     assert!(
         out.stdout.is_empty(),
         "{}",
@@ -233,11 +241,19 @@ fn run_unknown_spec_tool_exits_2_without_a_transcript() {
 }
 
 #[test]
-fn run_mode_plan_is_rejected_by_clap() {
+fn run_mode_plan_is_accepted_and_still_needs_an_api_key() {
     let dir = scratch();
     write_run_config(&dir, "llm.model = \"m\"\n");
     let out = run_output(&dir, &["--task", "hello", "--mode", "plan"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("llm.api_key"), "{stderr}");
+    assert!(!stderr.contains("not in this build"), "{stderr}");
     assert!(out.stdout.is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }
